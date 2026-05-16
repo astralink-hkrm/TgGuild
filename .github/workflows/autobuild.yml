@@ -1,0 +1,87 @@
+name: "Auto Build & Release"
+
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - 'app/package.json'
+      - 'app/src-tauri/tauri.conf.json'
+      - '.github/workflows/**'
+
+jobs:
+  version-bump:
+    runs-on: ubuntu-latest
+    outputs:
+      new_version: ${{ steps.bump.outputs.new_version }}
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: setup node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Bump version
+        id: bump
+        working-directory: app
+        run: |
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+          
+          # NEW_VERSION is captured from the last line of the script output
+          NEW_VERSION=$(node scripts/version-bump.js patch | tail -n 1)
+          echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
+          
+          git add package.json src-tauri/tauri.conf.json
+          git commit -m "chore: bump version to $NEW_VERSION [skip ci]"
+          git push origin main
+          
+          git tag "v$NEW_VERSION"
+          git push origin "v$NEW_VERSION"
+
+  build-and-release:
+    needs: version-bump
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-latest
+            args: ''
+
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v${{ needs.version-bump.outputs.new_version }}
+
+      - name: setup node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: install frontend dependencies
+        working-directory: app
+        run: npm install
+
+      - name: build the app
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: v${{ needs.version-bump.outputs.new_version }}
+          releaseName: 'tgTeams v${{ needs.version-bump.outputs.new_version }}'
+          releaseBody: 'Automated release for version v${{ needs.version-bump.outputs.new_version }}'
+          releaseDraft: false
+          prerelease: false
+          projectPath: ./app
