@@ -565,7 +565,7 @@ pub async fn cmd_send_team_invite_link(
         peer: team_input_peer,
         expire_date: None,
         usage_limit: None,
-        title: Some("tgTeams invite".to_string()),
+        title: Some("TgGuild invite".to_string()),
         subscription_pricing: None,
     }).await.map_err(|e| {
         log::error!("Failed to create invite link: {}", e);

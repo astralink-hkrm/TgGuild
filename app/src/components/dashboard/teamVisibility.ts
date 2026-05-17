@@ -1,5 +1,5 @@
-export const TEAM_VISIBILITY_STORAGE_KEY = 'tgTeams.teamVisibility';
-export const TEAM_VISIBILITY_CHANGED_EVENT = 'tgTeams:teamVisibilityChanged';
+export const TEAM_VISIBILITY_STORAGE_KEY = 'tgguild.teamVisibility';
+export const TEAM_VISIBILITY_CHANGED_EVENT = 'tgguild:teamVisibilityChanged';
 
 export interface TeamVisibilitySettings {
     hiddenTeamIds: string[];

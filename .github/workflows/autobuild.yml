@@ -80,7 +80,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tagName: v${{ needs.version-bump.outputs.new_version }}
-          releaseName: 'tgTeams v${{ needs.version-bump.outputs.new_version }}'
+          releaseName: 'TgGuild v${{ needs.version-bump.outputs.new_version }}'
           releaseBody: 'Automated release for version v${{ needs.version-bump.outputs.new_version }}'
           releaseDraft: false
           prerelease: false

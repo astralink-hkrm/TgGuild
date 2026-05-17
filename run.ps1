@@ -1,6 +1,6 @@
-# tgTeams Quick Start Script
+# TgGuild Quick Start Script
 
-Write-Host "Starting tgTeams Development Environment..." -ForegroundColor Cyan
+Write-Host "Starting TgGuild Development Environment..." -ForegroundColor Cyan
 
 # Check if we are in the right directory
 if (Test-Path "app") {

@@ -107,7 +107,7 @@ export function TeamChat({
 
     useEffect(() => {
         try {
-            const raw = window.localStorage.getItem(`tgTeams.reactions.${groupId ?? 'self'}`);
+            const raw = window.localStorage.getItem(`tgguild.reactions.${groupId ?? 'self'}`);
             setReactions(raw ? JSON.parse(raw) : {});
         } catch {
             setReactions({});
@@ -388,7 +388,7 @@ export function TeamChat({
                 : [...(reactions[key] || []), emoji],
         };
         setReactions(next);
-        window.localStorage.setItem(`tgTeams.reactions.${groupId ?? 'self'}`, JSON.stringify(next));
+        window.localStorage.setItem(`tgguild.reactions.${groupId ?? 'self'}`, JSON.stringify(next));
         setReactionPickerFor(null);
     };
 

@@ -7,8 +7,8 @@ use crate::models::{FolderMetadata, FileMetadata};
 use crate::bandwidth::BandwidthManager;
 use crate::commands::utils::{resolve_peer, map_error};
 
-const VIRTUAL_FOLDER_PREFIX: &str = "TGTEAMS_FOLDER_V1:";
-const VIRTUAL_FILE_PREFIX: &str = "TGTEAMS_FILE_V1:";
+const VIRTUAL_FOLDER_PREFIX: &str = "TGGuild_FOLDER_V1:";
+const VIRTUAL_FILE_PREFIX: &str = "TGGuild_FILE_V1:";
 
 fn parse_virtual_folder_meta(text: &str) -> Option<(String, Option<i64>)> {
     let json = text.strip_prefix(VIRTUAL_FOLDER_PREFIX)?;
@@ -84,7 +84,7 @@ pub async fn cmd_create_folder(
         broadcast: true,
         megagroup: false,
         title: format!("{} [TD]", name),
-        about: "Telegram Drive Storage Folder\n[telegram-drive-folder]".to_string(),
+        about: "TgGuild Storage Folder\n[tgguild-folder]".to_string(),
         geo_point: None,
         address: None,
         for_import: false,
