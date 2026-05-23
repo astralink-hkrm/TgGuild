@@ -15,7 +15,7 @@ import { DropZoneProvider } from "./contexts/DropZoneContext";
 const queryClient = new QueryClient();
 
 function AppContent() {
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [isAuthenticated, setIsAuthenticated] = useState(false); 
   const { theme } = useTheme();
   const { available, version, downloading, progress, downloadAndInstall, dismissUpdate } = useUpdateCheck();
 

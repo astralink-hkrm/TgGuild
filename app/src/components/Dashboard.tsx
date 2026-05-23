@@ -351,10 +351,10 @@ export function Dashboard({ onLogout }: { onLogout: () => void }) {
             <AnimatePresence>
                 {showMoveModal && (
                     <MoveToFolderModal
-                        folders={folders}
+                        virtualFolders={allFiles.filter(f => f.type === 'folder')}
                         onClose={() => setShowMoveModal(false)}
                         onSelect={handleBulkMove}
-                        activeFolderId={activeFolderId}
+                        activeVirtualFolderId={activeVirtualFolderId}
                         key="move-modal"
                     />
                 )}

@@ -94,16 +94,21 @@ export function useFileOperations(
         }
     }
 
-    const handleBulkMove = async (targetFolderId: number | null, onSuccess?: () => void) => {
+    const handleBulkMove = async (targetVirtualFolderId: number | null, onSuccess?: () => void) => {
         if (selectedIds.length === 0) return;
         try {
-            await invoke('cmd_move_files', {
+            // Moving within the same root folder to a virtual folder
+            await invoke('cmd_move_to_virtual_folder', {
                 messageIds: selectedIds,
-                sourceFolderId: activeFolderId,
-                targetFolderId: targetFolderId
+                folderId: activeFolderId,
+                targetVirtualFolderId: targetVirtualFolderId
             });
             toast.success(`Moved ${selectedIds.length} files.`);
             queryClient.invalidateQueries({ queryKey: ['files', activeFolderId, activeVirtualFolderId] });
+            if (targetVirtualFolderId !== null) {
+                // Also invalidate the target virtual folder
+                queryClient.invalidateQueries({ queryKey: ['files', activeFolderId, targetVirtualFolderId] });
+            }
             setSelectedIds([]);
             if (onSuccess) onSuccess();
         } catch {

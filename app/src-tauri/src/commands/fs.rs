@@ -583,6 +583,84 @@ pub async fn cmd_rename_file(
 }
 
 #[tauri::command]
+pub async fn cmd_move_to_virtual_folder(
+    message_ids: Vec<i32>,
+    folder_id: Option<i64>,
+    target_virtual_folder_id: Option<i64>,
+    state: State<'_, TelegramState>,
+) -> Result<bool, String> {
+    let client_opt = { state.client.lock().await.clone() };
+    if client_opt.is_none() {
+        log::info!("[MOCK] Moved messages {:?} in folder {:?} to virtual folder {:?}", message_ids, folder_id, target_virtual_folder_id);
+        return Ok(true);
+    }
+    let client = client_opt.unwrap();
+
+    let peer = resolve_peer(&client, folder_id, &state.peer_cache).await?;
+    
+    for message_id in message_ids {
+        if let Some(existing) = client
+            .get_messages_by_id(&peer, &[message_id])
+            .await
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .flatten()
+            .next()
+        {
+            let (name, _, current_id) = if let Some((n, _, c)) = parse_virtual_file_meta(existing.text()) {
+                (n, None::<i64>, c)
+            } else if let Some((n, _, c)) = parse_virtual_folder_meta(existing.text()) {
+                (n, None::<i64>, c)
+            } else {
+                // Regular file without metadata - use the file name or caption
+                let file_name = if !existing.text().is_empty() {
+                    existing.text().to_string()
+                } else if let Some(Media::Document(doc)) = existing.media() {
+                    let n = doc.name();
+                    if n.is_empty() { "file".to_string() } else { n.to_string() }
+                } else {
+                    "file".to_string()
+                };
+                (file_name, None::<i64>, Some(existing.id() as i64))
+            };
+
+            let input_peer = match &peer {
+                Peer::Channel(c) => tl::enums::InputPeer::Channel(tl::types::InputPeerChannel {
+                    channel_id: c.raw.id,
+                    access_hash: c.raw.access_hash.unwrap_or(0),
+                }),
+                Peer::User(_) => tl::enums::InputPeer::PeerSelf,
+                Peer::Group(_) => return Err("Groups are not supported for file operations.".to_string()),
+            };
+
+            // Check if it's a folder or file
+            let is_folder = parse_virtual_folder_meta(existing.text()).is_some();
+            let new_text = if is_folder {
+                virtual_folder_meta_text(&name, target_virtual_folder_id, current_id)
+            } else {
+                virtual_file_meta_text(&name, target_virtual_folder_id, current_id)
+            };
+
+            client.invoke(&tl::functions::messages::EditMessage {
+                no_webpage: true,
+                peer: input_peer,
+                id: message_id,
+                message: Some(new_text),
+                media: None,
+                reply_markup: None,
+                entities: None,
+                schedule_date: None,
+                invert_media: false,
+                quick_reply_shortcut_id: None,
+                schedule_repeat_period: None,
+            }).await.map_err(|e| format!("Failed to move file to virtual folder: {}", e))?;
+        }
+    }
+
+    Ok(true)
+}
+
+#[tauri::command]
 pub async fn cmd_delete_file(
     message_id: i32,
     folder_id: Option<i64>,

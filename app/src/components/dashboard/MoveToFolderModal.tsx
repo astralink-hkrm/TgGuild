@@ -1,28 +1,27 @@
 import { useState } from 'react';
-import { Plus, HardDrive, Folder, ChevronDown, Loader2 } from 'lucide-react';
-import { TelegramFolder } from '../../types';
+import { Plus, Folder, ChevronDown, Loader2 } from 'lucide-react';
+import { TelegramFile } from '../../types';
 
 interface MoveToFolderModalProps {
-    folders: TelegramFolder[];
+    virtualFolders: TelegramFile[];
     onClose: () => void;
     onSelect: (id: number | null) => void;
-    activeFolderId: number | null;
+    activeVirtualFolderId: number | null;
 }
 
 interface FolderItem {
     id: number | null;
     name: string;
-    isRoot?: boolean;
 }
 
-export function MoveToFolderModal({ folders, onClose, onSelect, activeFolderId }: MoveToFolderModalProps) {
+export function MoveToFolderModal({ virtualFolders, onClose, onSelect, activeVirtualFolderId }: MoveToFolderModalProps) {
     const [isDropdownOpen, setIsDropdownOpen] = useState(false);
     const [selectedFolder, setSelectedFolder] = useState<FolderItem | null>(null);
     const [isMoving, setIsMoving] = useState(false);
 
     const availableFolders: FolderItem[] = [
-        ...(activeFolderId !== null ? [{ id: null, name: 'Saved Messages', isRoot: true }] : []),
-        ...folders.filter(f => f.id !== activeFolderId).map(f => ({ id: f.id, name: f.name }))
+        ...(activeVirtualFolderId !== null ? [{ id: null, name: 'Root (Current Drive)' }] : []),
+        ...virtualFolders.filter(f => f.id !== activeVirtualFolderId).map(f => ({ id: f.id, name: f.name }))
     ];
 
     const handleSelectAndMove = async (folder: FolderItem) => {
@@ -37,15 +36,15 @@ export function MoveToFolderModal({ folders, onClose, onSelect, activeFolderId }
 
     return (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 backdrop-blur-sm" onClick={onClose}>
-            <div className="bg-telegram-surface border border-telegram-border rounded-xl w-96 shadow-2xl overflow-hidden flex flex-col" onClick={e => e.stopPropagation()}>
-                <div className="p-4 border-b border-telegram-border flex justify-between items-center">
+            <div className="bg-telegram-surface border border-telegram-border rounded-xl w-96 shadow-2xl h-[450px] flex flex-col" onClick={e => e.stopPropagation()}>
+                <div className="p-4 border-b border-telegram-border flex justify-between items-center shrink-0">
                     <h3 className="text-telegram-text font-medium">Move to Folder</h3>
                     <button onClick={onClose} className="text-telegram-subtext hover:text-telegram-text">
                         <Plus className="w-5 h-5 rotate-45" />
                     </button>
                 </div>
 
-                <div className="p-4">
+                <div className="p-4 flex-1 relative overflow-visible">
                     <label className="block text-xs font-medium text-telegram-subtext mb-2">
                         Select destination
                     </label>
@@ -67,10 +66,10 @@ export function MoveToFolderModal({ folders, onClose, onSelect, activeFolderId }
                                 ) : (
                                     <>
                                         <div className="w-8 h-8 rounded bg-telegram-primary/20 flex items-center justify-center text-telegram-primary">
-                                            <HardDrive className="w-4 h-4" />
+                                            <Folder className="w-4 h-4" />
                                         </div>
                                         <span className="font-medium text-telegram-subtext">
-                                            {activeFolderId !== null ? 'Saved Messages' : 'Select a folder'}
+                                            {activeVirtualFolderId !== null ? 'Root (Current Drive)' : 'Select a folder'}
                                         </span>
                                     </>
                                 )}
@@ -79,7 +78,7 @@ export function MoveToFolderModal({ folders, onClose, onSelect, activeFolderId }
                         </button>
 
                         {isDropdownOpen && availableFolders.length > 0 && (
-                            <div className="absolute top-full left-0 right-0 mt-2 bg-telegram-surface border border-telegram-border rounded-xl shadow-xl z-10 max-h-60 overflow-y-auto">
+                            <div className="absolute top-full left-0 right-0 mt-2 bg-telegram-surface border border-telegram-border rounded-xl shadow-xl z-50 max-h-[280px] overflow-y-auto overscroll-contain">
                                 {availableFolders.map((folder) => (
                                     <button
                                         key={folder.id ?? 'root'}
@@ -89,12 +88,8 @@ export function MoveToFolderModal({ folders, onClose, onSelect, activeFolderId }
                                         }}
                                         className="w-full flex items-center gap-3 px-4 py-3 text-sm text-left text-telegram-text hover:bg-telegram-hover transition-colors border-b border-telegram-border/50 last:border-b-0"
                                     >
-                                        <div className={`w-8 h-8 rounded flex items-center justify-center ${folder.isRoot ? 'bg-telegram-primary/20 text-telegram-primary' : 'bg-telegram-hover text-telegram-text'}`}>
-                                            {folder.isRoot ? (
-                                                <HardDrive className="w-4 h-4" />
-                                            ) : (
-                                                <Folder className="w-4 h-4" />
-                                            )}
+                                        <div className="w-8 h-8 rounded bg-telegram-hover flex items-center justify-center text-telegram-text">
+                                            <Folder className="w-4 h-4" />
                                         </div>
                                         <span className="font-medium">{folder.name}</span>
                                     </button>
@@ -110,7 +105,7 @@ export function MoveToFolderModal({ folders, onClose, onSelect, activeFolderId }
                     )}
                 </div>
 
-                <div className="p-4 border-t border-telegram-border flex justify-end gap-2">
+                <div className="p-4 border-t border-telegram-border flex justify-end gap-2 shrink-0">
                     <button
                         onClick={onClose}
                         className="px-4 py-2 text-sm font-medium text-telegram-subtext hover:text-telegram-text transition-colors"
@@ -119,7 +114,7 @@ export function MoveToFolderModal({ folders, onClose, onSelect, activeFolderId }
                     </button>
                     <button
                         onClick={() => {
-                            const folderToMove = selectedFolder || (activeFolderId !== null ? { id: null, name: 'Saved Messages' } : availableFolders[0]);
+                            const folderToMove = selectedFolder || (activeVirtualFolderId !== null ? { id: null, name: 'Root (Current Drive)' } : availableFolders[0]);
                             if (folderToMove) {
                                 handleSelectAndMove(folderToMove);
                             }
