@@ -9,7 +9,7 @@
     }
   },
   "productName": "TgGuild",
-  "version": "1.3.5",
+  "version": "1.3.6",
   "identifier": "com.tgguild.app",
   "build": {
     "beforeDevCommand": "npm run dev",
