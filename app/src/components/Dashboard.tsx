@@ -22,6 +22,7 @@ import { MoveToFolderModal } from './dashboard/MoveToFolderModal';
 import { ShareFilesModal } from './dashboard/ShareFilesModal';
 import { DragDropOverlay } from './dashboard/DragDropOverlay';
 import { ExternalDropBlocker } from './dashboard/ExternalDropBlocker';
+import { CreateFolderModal } from './dashboard/CreateFolderModal';
 
 // Hooks
 import { useTelegramConnection } from '../hooks/useTelegramConnection';
@@ -44,6 +45,7 @@ export function Dashboard({ onLogout }: { onLogout: () => void }) {
     const [virtualFolderStack, setVirtualFolderStack] = useState<TelegramFile[]>([]);
     const [showMoveModal, setShowMoveModal] = useState(false);
     const [showShareModal, setShowShareModal] = useState(false);
+    const [showCreateFolderModal, setShowCreateFolderModal] = useState(false);
     const [searchTerm, setSearchTerm] = useState("");
     const [searchResults, setSearchResults] = useState<TelegramFile[]>([]);
     const [isSearching, setIsSearching] = useState(false);
@@ -195,13 +197,14 @@ export function Dashboard({ onLogout }: { onLogout: () => void }) {
         onEscape: handleEscape,
         onSearch: handleFocusSearch,
         onEnter: handleEnter,
-        enabled: !showMoveModal && !showShareModal
+        enabled: !showMoveModal && !showShareModal && !showCreateFolderModal
     });
 
     useEffect(() => {
         setSelectedIds([]);
         setShowMoveModal(false);
         setShowShareModal(false);
+        setShowCreateFolderModal(false);
         setSearchTerm("");
         setSearchResults([]);
         setActiveVirtualFolderId(null);
@@ -248,18 +251,21 @@ export function Dashboard({ onLogout }: { onLogout: () => void }) {
     };
 
     const handleCreateVirtualFolder = async () => {
-        const name = prompt('Folder name:');
-        if (!name?.trim()) return;
+        setShowCreateFolderModal(true);
+    };
+
+    const handleCreateFolderSubmit = async (name: string) => {
         try {
             await invoke('cmd_create_virtual_folder', {
                 folderId: activeFolderId,
                 parentVirtualFolderId: activeVirtualFolderId,
-                name: name.trim(),
+                name: name,
             });
             queryClient.invalidateQueries({ queryKey: ['files', activeFolderId, activeVirtualFolderId] });
             toast.success('Folder created');
         } catch (e) {
             toast.error(`Failed to create folder: ${e}`);
+            throw e;
         }
     };
 
@@ -359,6 +365,13 @@ export function Dashboard({ onLogout }: { onLogout: () => void }) {
                         onClose={() => setShowShareModal(false)}
                         onShare={handleShareFiles}
                         key="share-files-modal"
+                    />
+                )}
+                {showCreateFolderModal && (
+                    <CreateFolderModal
+                        onClose={() => setShowCreateFolderModal(false)}
+                        onCreate={handleCreateFolderSubmit}
+                        key="create-folder-modal"
                     />
                 )}
                 {isDragging && internalDragFileId === null && <DragDropOverlay key="drag-drop-overlay" />}
