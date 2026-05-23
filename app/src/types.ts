@@ -3,6 +3,7 @@ export interface TelegramFile {
     folder_id?: number | null;
     virtual_folder_id?: number | null;
     parent_virtual_folder_id?: number | null;
+    current_id?: number | null;
     name: string;
     size: number;
     sizeStr: string; // Formatted size
@@ -15,6 +16,7 @@ export interface TelegramFolder {
     id: number;
     name: string;
     parent_id?: number;
+    current_id?: number;
     member_count?: number;
     top_members?: any[];
 }

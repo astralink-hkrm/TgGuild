@@ -22,6 +22,7 @@ pub struct FileMetadata {
     pub folder_id: Option<i64>,
     pub virtual_folder_id: Option<i64>,
     pub parent_virtual_folder_id: Option<i64>,
+    pub current_id: Option<i64>,
     pub name: String,
     pub size: u64, // Updated to u64
     pub mime_type: Option<String>,
@@ -42,6 +43,7 @@ pub struct Member {
 pub struct FolderMetadata {
     pub id: i64,
     pub parent_id: Option<i64>,
+    pub current_id: Option<i64>,
     pub name: String,
     pub member_count: i32,
     pub top_members: Vec<Member>,

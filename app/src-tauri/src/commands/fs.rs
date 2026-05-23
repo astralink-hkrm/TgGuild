@@ -10,7 +10,7 @@ use crate::commands::utils::{resolve_peer, map_error};
 const VIRTUAL_FOLDER_PREFIX: &str = "TGGuild_FOLDER_V1:";
 const VIRTUAL_FILE_PREFIX: &str = "TGGuild_FILE_V1:";
 
-fn parse_virtual_folder_meta(text: &str) -> Option<(String, Option<i64>)> {
+fn parse_virtual_folder_meta(text: &str) -> Option<(String, Option<i64>, Option<i64>)> {
     let json = text.strip_prefix(VIRTUAL_FOLDER_PREFIX)?;
     let value: serde_json::Value = serde_json::from_str(json).ok()?;
     let name = value.get("name")?.as_str()?.to_string();
@@ -21,18 +21,25 @@ fn parse_virtual_folder_meta(text: &str) -> Option<(String, Option<i64>)> {
             v.as_i64()
         }
     });
-    Some((name, parent_id))
+    let current_id = value.get("current_id").and_then(|v| {
+        if v.is_null() {
+            None
+        } else {
+            v.as_i64()
+        }
+    });
+    Some((name, parent_id, current_id))
 }
 
-fn virtual_folder_meta_text(name: &str, parent_id: Option<i64>) -> String {
+fn virtual_folder_meta_text(name: &str, parent_id: Option<i64>, current_id: Option<i64>) -> String {
     format!(
         "{}{}",
         VIRTUAL_FOLDER_PREFIX,
-        serde_json::json!({ "name": name, "parent_id": parent_id })
+        serde_json::json!({ "name": name, "parent_id": parent_id, "current_id": current_id })
     )
 }
 
-fn parse_virtual_file_meta(text: &str) -> Option<(String, Option<i64>)> {
+fn parse_virtual_file_meta(text: &str) -> Option<(String, Option<i64>, Option<i64>)> {
     let json = text.strip_prefix(VIRTUAL_FILE_PREFIX)?;
     let mut lines = json.lines();
     let value: serde_json::Value = serde_json::from_str(lines.next()?).ok()?;
@@ -44,14 +51,21 @@ fn parse_virtual_file_meta(text: &str) -> Option<(String, Option<i64>)> {
             v.as_i64()
         }
     });
-    Some((name, parent_id))
+    let current_id = value.get("current_id").and_then(|v| {
+        if v.is_null() {
+            None
+        } else {
+            v.as_i64()
+        }
+    });
+    Some((name, parent_id, current_id))
 }
 
-fn virtual_file_meta_text(name: &str, parent_id: Option<i64>) -> String {
+fn virtual_file_meta_text(name: &str, parent_id: Option<i64>, current_id: Option<i64>) -> String {
     format!(
         "{}{}",
         VIRTUAL_FILE_PREFIX,
-        serde_json::json!({ "name": name, "parent_id": parent_id })
+        serde_json::json!({ "name": name, "parent_id": parent_id, "current_id": current_id })
     )
 }
 
@@ -72,6 +86,7 @@ pub async fn cmd_create_folder(
             id: mock_id,
             name,
             parent_id: None,
+            current_id: Some(mock_id),
             member_count: 0,
             top_members: Vec::new(),
         });
@@ -118,6 +133,7 @@ pub async fn cmd_create_folder(
         id: chat_id,
         name,
         parent_id: None,
+        current_id: Some(chat_id),
         member_count: 1,
         top_members: Vec::new(),
     })
@@ -331,12 +347,36 @@ pub async fn cmd_upload_file(
 
     let uploaded_file = upload_result.map_err(map_error)?;
     let message = InputMessage::new()
-        .text(virtual_file_meta_text(&file_name, virtual_folder_id))
+        .text(virtual_file_meta_text(&file_name, virtual_folder_id, None))
         .file(uploaded_file);
 
     let peer = resolve_peer(&client, folder_id, &state.peer_cache).await?;
 
-    client.send_message(&peer, message).await.map_err(map_error)?;
+    let sent = client.send_message(&peer, message).await.map_err(map_error)?;
+
+    let message_id = sent.id();
+    let input_peer = match &peer {
+        Peer::Channel(c) => tl::enums::InputPeer::Channel(tl::types::InputPeerChannel {
+            channel_id: c.raw.id,
+            access_hash: c.raw.access_hash.unwrap_or(0),
+        }),
+        Peer::User(_) => tl::enums::InputPeer::PeerSelf,
+        Peer::Group(_) => return Err("Groups are not supported for file operations.".to_string()),
+    };
+
+    let _ = client.invoke(&tl::functions::messages::EditMessage {
+        no_webpage: true,
+        peer: input_peer,
+        id: message_id,
+        message: Some(virtual_file_meta_text(&file_name, virtual_folder_id, Some(message_id as i64))),
+        media: None,
+        reply_markup: None,
+        entities: None,
+        schedule_date: None,
+        invert_media: false,
+        quick_reply_shortcut_id: None,
+        schedule_repeat_period: None,
+    }).await;
 
     bw_state.add_up(size);
 
@@ -463,7 +503,7 @@ pub async fn cmd_rename_file(
         .flatten()
         .next()
     {
-        if let Some((_, parent_id)) = parse_virtual_folder_meta(existing.text()) {
+        if let Some((_, parent_id, current_id)) = parse_virtual_folder_meta(existing.text()) {
             let input_peer = match &peer {
                 Peer::Channel(c) => tl::enums::InputPeer::Channel(tl::types::InputPeerChannel {
                     channel_id: c.raw.id,
@@ -476,7 +516,7 @@ pub async fn cmd_rename_file(
                 no_webpage: true,
                 peer: input_peer,
                 id: message_id,
-                message: Some(virtual_folder_meta_text(&new_name, parent_id)),
+                message: Some(virtual_folder_meta_text(&new_name, parent_id, current_id)),
                 media: None,
                 reply_markup: None,
                 entities: None,
@@ -487,7 +527,7 @@ pub async fn cmd_rename_file(
             }).await.map_err(|e| format!("Failed to rename folder: {}", e))?;
             return Ok(true);
         }
-        if let Some((_, parent_id)) = parse_virtual_file_meta(existing.text()) {
+        if let Some((_, parent_id, current_id)) = parse_virtual_file_meta(existing.text()) {
             let input_peer = match &peer {
                 Peer::Channel(c) => tl::enums::InputPeer::Channel(tl::types::InputPeerChannel {
                     channel_id: c.raw.id,
@@ -500,7 +540,7 @@ pub async fn cmd_rename_file(
                 no_webpage: true,
                 peer: input_peer,
                 id: message_id,
-                message: Some(virtual_file_meta_text(&new_name, parent_id)),
+                message: Some(virtual_file_meta_text(&new_name, parent_id, current_id)),
                 media: None,
                 reply_markup: None,
                 entities: None,
@@ -734,13 +774,14 @@ pub async fn cmd_get_files(
 
     let mut msgs = client.iter_messages(&peer);
     while let Some(msg) = msgs.next().await.map_err(|e| e.to_string())? {
-        if let Some((name, parent_virtual_folder_id)) = parse_virtual_folder_meta(msg.text()) {
+        if let Some((name, parent_virtual_folder_id, meta_current_id)) = parse_virtual_folder_meta(msg.text()) {
             if parent_virtual_folder_id == virtual_folder_id {
                 files.push(FileMetadata {
                     id: msg.id() as i64,
                     folder_id,
                     virtual_folder_id: Some(msg.id() as i64),
                     parent_virtual_folder_id,
+                    current_id: meta_current_id.or(Some(msg.id() as i64)),
                     name,
                     size: 0,
                     mime_type: None,
@@ -766,9 +807,11 @@ pub async fn cmd_get_files(
             };
 
             let mut parent_virtual_folder_id = None;
-            if let Some((meta_name, meta_parent_id)) = parse_virtual_file_meta(msg.text()) {
+            let mut current_id = None;
+            if let Some((meta_name, meta_parent_id, meta_current_id)) = parse_virtual_file_meta(msg.text()) {
                 name = meta_name;
                 parent_virtual_folder_id = meta_parent_id;
+                current_id = meta_current_id;
             } else if !msg.text().is_empty() {
                 name = msg.text().to_string();
             }
@@ -782,6 +825,7 @@ pub async fn cmd_get_files(
                 folder_id,
                 virtual_folder_id: None,
                 parent_virtual_folder_id,
+                current_id: current_id.or(Some(msg.id() as i64)),
                 name,
                 size: size as u64,
                 mime_type: mime,
@@ -813,6 +857,7 @@ pub async fn cmd_create_virtual_folder(
             folder_id,
             virtual_folder_id: Some(id),
             parent_virtual_folder_id,
+            current_id: Some(id),
             name,
             size: 0,
             mime_type: None,
@@ -824,14 +869,40 @@ pub async fn cmd_create_virtual_folder(
     let client = client_opt.unwrap();
     let peer = resolve_peer(&client, folder_id, &state.peer_cache).await?;
     let sent = client
-        .send_message(&peer, InputMessage::new().text(virtual_folder_meta_text(&name, parent_virtual_folder_id)))
+        .send_message(&peer, InputMessage::new().text(virtual_folder_meta_text(&name, parent_virtual_folder_id, None)))
         .await
         .map_err(map_error)?;
+
+    let message_id = sent.id();
+    let input_peer = match &peer {
+        Peer::Channel(c) => tl::enums::InputPeer::Channel(tl::types::InputPeerChannel {
+            channel_id: c.raw.id,
+            access_hash: c.raw.access_hash.unwrap_or(0),
+        }),
+        Peer::User(_) => tl::enums::InputPeer::PeerSelf,
+        Peer::Group(_) => return Err("Groups are not supported for file operations.".to_string()),
+    };
+
+    let _ = client.invoke(&tl::functions::messages::EditMessage {
+        no_webpage: true,
+        peer: input_peer,
+        id: message_id,
+        message: Some(virtual_folder_meta_text(&name, parent_virtual_folder_id, Some(message_id as i64))),
+        media: None,
+        reply_markup: None,
+        entities: None,
+        schedule_date: None,
+        invert_media: false,
+        quick_reply_shortcut_id: None,
+        schedule_repeat_period: None,
+    }).await;
+
     Ok(FileMetadata {
         id: sent.id() as i64,
         folder_id,
         virtual_folder_id: Some(sent.id() as i64),
         parent_virtual_folder_id,
+        current_id: Some(sent.id() as i64),
         name,
         size: 0,
         mime_type: None,
@@ -880,9 +951,17 @@ pub async fn cmd_search_global(
                             _ => None
                         }).unwrap_or("Unknown".to_string());
 
+                        let mut current_id = Some(m.id as i64);
+
                         // Use message text (caption) as rename override if present
                         if !m.message.is_empty() {
                             name = m.message.clone();
+                            if let Some((meta_name, _, meta_current_id)) = parse_virtual_file_meta(&m.message) {
+                                name = meta_name;
+                                if let Some(cid) = meta_current_id {
+                                    current_id = Some(cid);
+                                }
+                            }
                         }
 
                         let size = doc.size as u64;
@@ -898,6 +977,7 @@ pub async fn cmd_search_global(
                             folder_id,
                             virtual_folder_id: None,
                             parent_virtual_folder_id: None,
+                            current_id,
                             name,
                             size,
                             mime_type: Some(mime), file_ext: ext,
@@ -917,9 +997,17 @@ pub async fn cmd_search_global(
                             _ => None
                         }).unwrap_or("Unknown".to_string());
 
+                        let mut current_id = Some(m.id as i64);
+
                         // Use message text (caption) as rename override if present
                         if !m.message.is_empty() {
                             name = m.message.clone();
+                            if let Some((meta_name, _, meta_current_id)) = parse_virtual_file_meta(&m.message) {
+                                name = meta_name;
+                                if let Some(cid) = meta_current_id {
+                                    current_id = Some(cid);
+                                }
+                            }
                         }
 
                         let size = doc.size as u64;
@@ -935,6 +1023,7 @@ pub async fn cmd_search_global(
                             folder_id,
                             virtual_folder_id: None,
                             parent_virtual_folder_id: None,
+                            current_id,
                             name,
                             size,
                             mime_type: Some(mime), file_ext: ext,
@@ -987,6 +1076,7 @@ pub async fn cmd_scan_folders(
                         id, 
                         name: display_name, 
                         parent_id: None,
+                        current_id: Some(id),
                         member_count: 0,
                         top_members: Vec::new(),
                     });
@@ -1015,6 +1105,7 @@ pub async fn cmd_scan_folders(
                                      id, 
                                      name: name.clone(), 
                                      parent_id: None,
+                                     current_id: Some(id),
                                      member_count,
                                      top_members: Vec::new(),
                                  });
