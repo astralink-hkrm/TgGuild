@@ -56,59 +56,79 @@ export function useFileOperations(
     }
 
     const handleDownload = async (id: number, name: string) => {
+        console.log(`[useFileOperations] handleDownload start: id=${id}, name=${name}`);
         try {
             const savePath = await import('@tauri-apps/plugin-dialog').then(d => d.save({
                 defaultPath: name,
             }));
-            if (!savePath) return;
+            if (!savePath) {
+                console.log(`[useFileOperations] handleDownload cancelled by user`);
+                return;
+            }
+            console.log(`[useFileOperations] handleDownload savePath: ${savePath}`);
             toast.info(`Download started: ${name}`);
             await invoke('cmd_download_file', { messageId: id, savePath, folderId: activeFolderId });
+            console.log(`[useFileOperations] handleDownload success: ${name}`);
             toast.success(`Download complete: ${name}`);
         } catch (e) {
+            console.error(`[useFileOperations] handleDownload failed:`, e);
             toast.error(`Download failed: ${e}`);
         }
     }
 
     const handleBulkDownload = async () => {
+        console.log(`[useFileOperations] handleBulkDownload start. selectedIds:`, selectedIds);
         if (selectedIds.length === 0) return;
         
         try {
             const dirPath = await import('@tauri-apps/plugin-dialog').then(d => d.open({
                 directory: true, multiple: false, title: "Select Download Destination"
             }));
-            if (!dirPath) return;
+            if (!dirPath) {
+                console.log(`[useFileOperations] handleBulkDownload cancelled: no directory selected`);
+                return;
+            }
+            console.log(`[useFileOperations] handleBulkDownload destination: ${dirPath}`);
             
             const itemsToDownload = displayedFiles.filter((f) => selectedIds.includes(f.current_id ?? f.id));
             const files = itemsToDownload.filter(f => f.type !== 'folder');
             const folders = itemsToDownload.filter(f => f.type === 'folder');
             
+            console.log(`[useFileOperations] handleBulkDownload items: ${files.length} files, ${folders.length} folders`);
+
             let totalFiles = files.length;
             let downloadedCount = 0;
             
             // Count total files including those in folders
             for (const folder of folders) {
+                console.log(`[useFileOperations] Counting files in folder: ${folder.name}`);
                 const count = await countFilesInFolder(folder.id);
                 totalFiles += count;
             }
             
+            console.log(`[useFileOperations] Total files to download: ${totalFiles}`);
             toast.info(`Starting download of ${totalFiles} file(s)...`);
             
             // Download individual files
             for (const file of files) {
                 const filePath = `${dirPath}/${file.name}`;
+                const messageId = file.current_id ?? file.id;
+                console.log(`[useFileOperations] Downloading file: ${file.name} (messageId: ${messageId})`);
                 try {
                     toast.info(`Downloading: ${file.name}`, { duration: 1000 });
                     await invoke('cmd_download_file', { 
-                        messageId: file.current_id ?? file.id, 
+                        messageId, 
                         savePath: filePath, 
                         folderId: activeFolderId 
                     });
+                    console.log(`[useFileOperations] Successfully downloaded: ${file.name}`);
                     downloadedCount++;
                 } catch (e) {
                     const errorStr = String(e);
+                    console.error(`[useFileOperations] Failed to download ${file.name}:`, e);
                     // Silently skip folder metadata messages
                     if (!errorStr.includes('No media in message')) {
-                        console.error(`Failed to download ${file.name}:`, e);
+                        // console.error(`Failed to download ${file.name}:`, e);
                     }
                 }
             }
@@ -116,13 +136,16 @@ export function useFileOperations(
             // Download folders recursively
             for (const folder of folders) {
                 const folderPath = `${dirPath}/${folder.name.replace('/', '')}`;
+                console.log(`[useFileOperations] Downloading folder recursively: ${folder.name} to ${folderPath}`);
                 const count = await downloadFolderRecursively(folder, folderPath, activeFolderId);
                 downloadedCount += count;
             }
             
+            console.log(`[useFileOperations] Bulk download complete. ${downloadedCount} of ${totalFiles} downloaded.`);
             toast.success(`Downloaded ${downloadedCount} of ${totalFiles} file(s).`);
             setSelectedIds([]);
         } catch (e) {
+            console.error(`[useFileOperations] Bulk download error:`, e);
             toast.error(`Bulk download failed: ${e}`);
         }
     };
@@ -449,14 +472,27 @@ export function useFileOperations(
                 directory: true, multiple: false, title: "Download Folder To..."
             }));
             if (!dirPath) return;
+
+            const filesToDownload = displayedFiles.filter(f => f.type !== 'folder');
+            if (filesToDownload.length === 0) {
+                toast.info("No files to download in this folder.");
+                return;
+            }
+
             let successCount = 0;
-            toast.info(`Downloading folder contents (${displayedFiles.length} files)...`);
-            for (const file of displayedFiles) {
+            toast.info(`Downloading folder contents (${filesToDownload.length} files)...`);
+            for (const file of filesToDownload) {
                 const filePath = `${dirPath}/${file.name}`;
                 try {
-                    await invoke('cmd_download_file', { messageId: file.id, savePath: filePath, folderId: activeFolderId });
+                    await invoke('cmd_download_file', { 
+                        messageId: file.current_id ?? file.id, 
+                        savePath: filePath, 
+                        folderId: activeFolderId 
+                    });
                     successCount++;
-                } catch (e) { }
+                } catch (e) {
+                    console.error(`Failed to download ${file.name}:`, e);
+                }
             }
             toast.success(`Folder Download Complete: ${successCount} files.`);
         } catch (e) {

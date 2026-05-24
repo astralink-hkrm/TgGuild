@@ -184,9 +184,9 @@ export function Dashboard({ onLogout }: { onLogout: () => void }) {
 
     const handleEnter = useCallback(() => {
         if (selectedIds.length === 1) {
-            const selected = displayedFiles.find(f => f.id === selectedIds[0]);
+            const selected = displayedFiles.find(f => (f.current_id ?? f.id) === selectedIds[0]);
             if (selected && selected.type !== 'folder') {
-                openWithSystemApp(selected.id, selected.name, activeFolderId);
+                openWithSystemApp(selected.current_id ?? selected.id, selected.name, activeFolderId);
             }
         }
     }, [selectedIds, displayedFiles, activeFolderId, openWithSystemApp]);
@@ -246,12 +246,13 @@ export function Dashboard({ onLogout }: { onLogout: () => void }) {
     }, [displayedFiles]);
 
     const handleOpenFile = (file: TelegramFile) => {
+        const actualId = file.current_id ?? file.id;
         if (file.type === 'folder') {
             setActiveVirtualFolderId(file.id);
             setVirtualFolderStack(stack => [...stack, file]);
             setSelectedIds([]);
         } else {
-            openWithSystemApp(file.id, file.name, activeFolderId);
+            openWithSystemApp(actualId, file.name, activeFolderId);
         }
     };
 

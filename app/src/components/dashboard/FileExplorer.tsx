@@ -288,11 +288,12 @@ export function FileExplorer({
                                             );
                                         }
                                         const file = item;
+                                        const actualId = file.current_id ?? file.id;
                                         return (
                                             <FileCard
                                                 key={file.id}
                                                 file={file}
-                                                isSelected={selectedIds.includes(file.current_id ?? file.id)}
+                                                isSelected={selectedIds.includes(actualId)}
                                                 onClick={(e) => {
                                                     if (file.type === 'folder') {
                                                         e.stopPropagation();
@@ -303,7 +304,7 @@ export function FileExplorer({
                                                 }}
                                                 onContextMenu={(e) => handleContextMenu(e, file)}
                                                 onDelete={() => onDelete(file.id)}
-                                                onDownload={() => onDownload(file.id, file.name)}
+                                                onDownload={() => onDownload(actualId, file.name)}
                                                 onOpen={() => handleOpenRequest(file)}
                                                 onDrop={undefined}
                                                 onDragStart={onDragStart}
@@ -351,6 +352,7 @@ export function FileExplorer({
                                 );
                             }
                             const file = item;
+                            const actualId = file.current_id ?? file.id;
                             return (
                                 <div
                                     key={file.id}
@@ -373,7 +375,7 @@ export function FileExplorer({
                                         onDragEnd={onDragEnd}
                                         onDrop={undefined}
                                         onOpen={handleOpenRequest}
-                                        onDownload={onDownload}
+                                        onDownload={() => onDownload(actualId, file.name)}
                                         onDelete={onDelete}
                                     />
                                 </div>
@@ -390,7 +392,7 @@ export function FileExplorer({
                     file={contextMenu.file}
                     onClose={() => setContextMenu(null)}
                     onDownload={() => {
-                        onDownload(contextMenu.file.id, contextMenu.file.name);
+                        onDownload(contextMenu.file.current_id ?? contextMenu.file.id, contextMenu.file.name);
                         setContextMenu(null);
                     }}
                     onDelete={() => {

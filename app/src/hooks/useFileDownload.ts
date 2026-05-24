@@ -71,17 +71,22 @@ export function useFileDownload(store: Store | null) {
     }, [downloadQueue, processing]);
 
     const processItem = async (item: DownloadItem) => {
+        console.log(`[useFileDownload] Processing item:`, item);
         setProcessing(true);
         setDownloadQueue(q => q.map(i => i.id === item.id ? { ...i, status: 'downloading', progress: 0 } : i));
 
         try {
+            console.log(`[useFileDownload] Opening save dialog for: ${item.filename}`);
             const savePath = await save({ defaultPath: item.filename });
             if (!savePath) {
+                console.log(`[useFileDownload] Download cancelled by user (no save path)`);
                 setDownloadQueue(q => q.filter(i => i.id !== item.id));
                 setProcessing(false);
                 return;
             }
+            console.log(`[useFileDownload] Save path selected: ${savePath}`);
 
+            console.log(`[useFileDownload] Invoking cmd_download_file for messageId: ${item.messageId}`);
             await invoke('cmd_download_file', {
                 messageId: item.messageId,
                 savePath,
@@ -90,12 +95,15 @@ export function useFileDownload(store: Store | null) {
             });
 
             if (cancelledRef.current.has(item.id)) {
+                console.log(`[useFileDownload] Transfer for ${item.id} was cancelled during invoke`);
                 cancelledRef.current.delete(item.id);
             } else {
+                console.log(`[useFileDownload] Download successful for: ${item.filename}`);
                 setDownloadQueue(q => q.map(i => i.id === item.id ? { ...i, status: 'success', progress: 100 } : i));
                 toast.success(`Downloaded: ${item.filename}`);
             }
         } catch (e) {
+            console.error(`[useFileDownload] Download error for ${item.filename}:`, e);
             if (!cancelledRef.current.has(item.id)) {
                 const errMsg = String(e);
                 if (errMsg.includes('Transfer cancelled')) {
@@ -105,6 +113,7 @@ export function useFileDownload(store: Store | null) {
                     toast.error(`Download failed: ${item.filename}`);
                 }
             } else {
+                console.log(`[useFileDownload] Caught error for cancelled transfer: ${item.id}`);
                 cancelledRef.current.delete(item.id);
             }
         } finally {
@@ -113,6 +122,7 @@ export function useFileDownload(store: Store | null) {
     };
 
     const queueDownload = (messageId: number, filename: string, folderId: number | null) => {
+        console.log(`[useFileDownload] Queuing download: messageId=${messageId}, filename=${filename}, folderId=${folderId}`);
         const newItem: DownloadItem = {
             id: Math.random().toString(36).substr(2, 9),
             messageId,
@@ -124,12 +134,17 @@ export function useFileDownload(store: Store | null) {
     };
 
     const queueBulkDownload = async (files: TelegramFile[], folderId: number | null) => {
+        console.log(`[useFileDownload] Queuing bulk download for ${files.length} files`);
         const dirPath = await open({
             directory: true,
             multiple: false,
             title: "Select Download Destination"
         });
-        if (!dirPath) return;
+        if (!dirPath) {
+            console.log(`[useFileDownload] Bulk download cancelled: no directory selected`);
+            return;
+        }
+        console.log(`[useFileDownload] Bulk download destination: ${dirPath}`);
 
         for (const file of files) {
             const newItem: DownloadItem = {

@@ -635,10 +635,20 @@ pub async fn cmd_move_to_virtual_folder(
 
             // Check if it's a folder or file
             let is_folder = parse_virtual_folder_meta(existing.text()).is_some();
-            let new_text = if is_folder {
-                virtual_folder_meta_text(&name, target_virtual_folder_id, current_id)
+            
+            // If the message HAS media, we refresh current_id to THIS message's ID.
+            // This ensures that after a cross-drive move (where the message was forwarded),
+            // the metadata correctly points to the new message that actually contains the data.
+            let final_cid = if existing.media().is_some() {
+                Some(existing.id() as i64)
             } else {
-                virtual_file_meta_text(&name, target_virtual_folder_id, current_id)
+                current_id
+            };
+
+            let new_text = if is_folder {
+                virtual_folder_meta_text(&name, target_virtual_folder_id, final_cid)
+            } else {
+                virtual_file_meta_text(&name, target_virtual_folder_id, final_cid)
             };
 
             client.invoke(&tl::functions::messages::EditMessage {
@@ -689,35 +699,55 @@ pub async fn cmd_download_file(
     bw_state: State<'_, BandwidthManager>,
 ) -> Result<String, String> {
     let tid = transfer_id.unwrap_or_default();
+    log::info!("[cmd_download_file] Start: message_id={}, save_path={}, folder_id={:?}, transfer_id={}", message_id, save_path, folder_id, tid);
 
     let client_opt = { state.client.lock().await.clone() };
     if client_opt.is_none() { 
         log::info!("[MOCK] Downloaded message {} from {:?} to {}", message_id, folder_id, save_path);
-        if let Err(e) = std::fs::write(&save_path, b"Mock Content") { return Err(e.to_string()); }
+        if let Err(e) = std::fs::write(&save_path, b"Mock Content") { 
+            log::error!("[cmd_download_file] MOCK write error: {}", e);
+            return Err(e.to_string()); 
+        }
         return Ok("Download successful".to_string());
     }
     let client = client_opt.unwrap();
     
+    log::info!("[cmd_download_file] Resolving peer for folder_id: {:?}", folder_id);
     let peer = resolve_peer(&client, folder_id, &state.peer_cache).await?;
+    log::info!("[cmd_download_file] Peer resolved");
 
     // Use get_messages_by_id for efficient message lookup (same as server.rs)
-    let messages = client.get_messages_by_id(&peer, &[message_id]).await.map_err(|e| e.to_string())?;
+    log::info!("[cmd_download_file] Fetching message details for message_id: {}", message_id);
+    let messages = client.get_messages_by_id(&peer, &[message_id]).await.map_err(|e| {
+        log::error!("[cmd_download_file] Error fetching message: {}", e);
+        e.to_string()
+    })?;
     
     let msg = messages.into_iter()
         .flatten()
         .next()
-        .ok_or_else(|| "Message not found".to_string())?;
+        .ok_or_else(|| {
+            log::error!("[cmd_download_file] Message not found for id={}", message_id);
+            "Message not found".to_string()
+        })?;
 
     let media = msg.media()
-        .ok_or_else(|| "No media in message".to_string())?;
+        .ok_or_else(|| {
+            log::error!("[cmd_download_file] No media in message id={}. Text: '{}', MsgType={:?}", message_id, msg.text(), msg);
+            "No media in message".to_string()
+        })?;
 
     let total_size = match &media {
         Media::Document(d) => d.size() as u64,
         Media::Photo(_) => 1024 * 1024,
         _ => 0,
     };
+    log::info!("[cmd_download_file] Media found, total_size: {}", total_size);
     
-    bw_state.can_transfer(total_size)?;
+    bw_state.can_transfer(total_size).map_err(|e| {
+        log::error!("[cmd_download_file] Bandwidth limit exceeded: {}", e);
+        e
+    })?;
 
     // Emit start
     if !tid.is_empty() {
@@ -728,12 +758,22 @@ pub async fn cmd_download_file(
 
     // Create parent directories if they don't exist
     if let Some(parent) = std::path::Path::new(&save_path).parent() {
-        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        if !parent.exists() {
+            log::info!("[cmd_download_file] Creating parent directories: {:?}", parent);
+            std::fs::create_dir_all(parent).map_err(|e| {
+                log::error!("[cmd_download_file] Directory creation error: {}", e);
+                e.to_string()
+            })?;
+        }
     }
 
     // Stream download with per-chunk progress
+    log::info!("[cmd_download_file] Starting download iteration");
     let mut download_iter = client.iter_download(&media);
-    let mut file = std::fs::File::create(&save_path).map_err(|e| e.to_string())?;
+    let mut file = std::fs::File::create(&save_path).map_err(|e| {
+        log::error!("[cmd_download_file] File creation error: {}", e);
+        e.to_string()
+    })?;
     let mut downloaded: u64 = 0;
     let mut last_emit_time = std::time::Instant::now();
     let mut last_emit_bytes: u64 = 0;
@@ -741,14 +781,21 @@ pub async fn cmd_download_file(
     while let Some(chunk) = download_iter.next().await.transpose() {
         // Check cancellation
         if state.cancelled_transfers.read().await.contains(&tid) {
+            log::info!("[cmd_download_file] Transfer cancelled for id: {}", tid);
             state.cancelled_transfers.write().await.remove(&tid);
             drop(file);
             cleanup_partial_file(&save_path);
             return Err("Transfer cancelled".to_string());
         }
 
-        let bytes = chunk.map_err(|e| format!("Download chunk error: {}", e))?;
-        std::io::Write::write_all(&mut file, &bytes).map_err(|e| e.to_string())?;
+        let bytes = chunk.map_err(|e| {
+            log::error!("[cmd_download_file] Download chunk error: {}", e);
+            format!("Download chunk error: {}", e)
+        })?;
+        std::io::Write::write_all(&mut file, &bytes).map_err(|e| {
+            log::error!("[cmd_download_file] File write error: {}", e);
+            e.to_string()
+        })?;
         downloaded += bytes.len() as u64;
         
         // Time-based progress emission (every 250ms)
@@ -767,6 +814,7 @@ pub async fn cmd_download_file(
         }
     }
 
+    log::info!("[cmd_download_file] Download completed successfully: {} bytes", downloaded);
     bw_state.add_down(total_size);
 
     // Emit completion
@@ -864,14 +912,18 @@ pub async fn cmd_get_files(
 
     let mut msgs = client.iter_messages(&peer);
     while let Some(msg) = msgs.next().await.map_err(|e| e.to_string())? {
-        if let Some((name, parent_virtual_folder_id, meta_current_id)) = parse_virtual_folder_meta(msg.text()) {
-            if parent_virtual_folder_id == virtual_folder_id {
+        let text = msg.text();
+        
+        // 1. Check for Virtual Folder
+        if let Some((name, parent_id, meta_cid)) = parse_virtual_folder_meta(text) {
+            if parent_id == virtual_folder_id {
+                log::debug!("[cmd_get_files] Found virtual folder: id={}, name={}", msg.id(), name);
                 files.push(FileMetadata {
                     id: msg.id() as i64,
                     folder_id,
                     virtual_folder_id: Some(msg.id() as i64),
-                    parent_virtual_folder_id,
-                    current_id: meta_current_id.or(Some(msg.id() as i64)),
+                    parent_virtual_folder_id: parent_id,
+                    current_id: meta_cid.or(Some(msg.id() as i64)),
                     name,
                     size: 0,
                     mime_type: None,
@@ -883,8 +935,20 @@ pub async fn cmd_get_files(
             continue;
         }
 
-        if let Some(doc) = msg.media() {
-            let (mut name, size, mime, ext) = match doc {
+        // 2. Check for Virtual File Metadata
+        let mut virtual_file = None;
+        if let Some((name, parent_id, meta_cid)) = parse_virtual_file_meta(text) {
+            if parent_id == virtual_folder_id {
+                virtual_file = Some((name, meta_cid));
+            } else {
+                // Belong to a different virtual folder, skip
+                continue;
+            }
+        }
+
+        // 3. Process as File (either virtual or regular)
+        if let Some(media) = msg.media() {
+            let (mut name, size, mime, ext) = match media {
                 Media::Document(d) => {
                     let n = d.name().to_string();
                     let s = d.size();
@@ -896,30 +960,48 @@ pub async fn cmd_get_files(
                 _ => ("Unknown".to_string(), 0, None, None),
             };
 
-            let mut parent_virtual_folder_id = None;
-            let mut current_id = None;
-            if let Some((meta_name, meta_parent_id, meta_current_id)) = parse_virtual_file_meta(msg.text()) {
-                name = meta_name;
-                parent_virtual_folder_id = meta_parent_id;
-                current_id = meta_current_id;
-            } else if !msg.text().is_empty() {
-                name = msg.text().to_string();
+            let mut final_current_id = msg.id() as i64;
+
+            if let Some((v_name, _)) = virtual_file {
+                name = v_name;
+                // If the message HAS media, we ignore the CID in metadata because THIS message is the one to download.
+                // This fixes stale IDs after cross-drive moves.
+                log::debug!("[cmd_get_files] File has media AND metadata. Using current message ID {} for download.", msg.id());
+            } else if !text.is_empty() {
+                // Caption as name override for non-virtual files
+                name = text.to_string();
             }
 
-            if parent_virtual_folder_id != virtual_folder_id {
-                continue;
+            // Only include if it's in the root (virtual_folder_id is None) OR if it was explicitly matched via metadata
+            if virtual_folder_id.is_none() || virtual_file.is_some() {
+                log::debug!("[cmd_get_files] Adding file: id={}, name={}, current_id={}", msg.id(), name, final_current_id);
+                files.push(FileMetadata {
+                    id: msg.id() as i64,
+                    folder_id,
+                    virtual_folder_id: None,
+                    parent_virtual_folder_id: virtual_folder_id,
+                    current_id: Some(final_current_id),
+                    name,
+                    size: size as u64,
+                    mime_type: mime,
+                    file_ext: ext,
+                    created_at: msg.date().to_string(),
+                    icon_type: "file".into(),
+                });
             }
-
+        } else if let Some((name, meta_cid)) = virtual_file {
+            // Text-only virtual file pointer (rare, but supported)
+            log::debug!("[cmd_get_files] Adding text-only virtual file: id={}, name={}, current_id={:?}", msg.id(), name, meta_cid);
             files.push(FileMetadata {
                 id: msg.id() as i64,
                 folder_id,
                 virtual_folder_id: None,
-                parent_virtual_folder_id,
-                current_id: current_id.or(Some(msg.id() as i64)),
+                parent_virtual_folder_id: virtual_folder_id,
+                current_id: meta_cid.or(Some(msg.id() as i64)),
                 name,
-                size: size as u64,
-                mime_type: mime,
-                file_ext: ext,
+                size: 0,
+                mime_type: None,
+                file_ext: None,
                 created_at: msg.date().to_string(),
                 icon_type: "file".into(),
             });
