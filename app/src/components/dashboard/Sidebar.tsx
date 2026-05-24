@@ -34,6 +34,14 @@ interface ContactInfo {
     unread_count?: number;
 }
 
+interface CurrentUser {
+    user_id: string;
+    first_name: string;
+    last_name?: string | null;
+    username?: string | null;
+    phone?: string | null;
+}
+
 interface SidebarProps {
     folders: TelegramFolder[];
     activeFolderId: number | null;
@@ -69,11 +77,13 @@ export function Sidebar({
     const [contacts, setContacts] = useState<ContactInfo[]>([]);
     const [streamToken, setStreamToken] = useState('');
     const [teamVisibility, setTeamVisibility] = useState<TeamVisibilitySettings>(() => readTeamVisibility());
+    const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
 
     useEffect(() => {
         loadGroups();
         loadDirectChats();
         invoke<string>('cmd_get_stream_token').then(setStreamToken).catch(console.error);
+        invoke<CurrentUser | null>('cmd_get_current_user').then(setCurrentUser).catch(console.error);
     }, []);
 
     useEffect(() => {
@@ -131,9 +141,25 @@ export function Sidebar({
 
     return (
         <aside className="w-64 bg-telegram-surface border-r border-telegram-border flex flex-col" onClick={e => e.stopPropagation()}>
-            <div className="p-4 flex items-center gap-2">
-                <img src="/logo.png" className="w-8 h-8 drop-shadow-lg" alt="Logo" />
-                <span className="font-bold text-lg text-telegram-text tracking-tight">TgGuild</span>
+            <div className="p-4 flex items-center gap-3">
+                {currentUser ? (
+                    <>
+                        <TelegramAvatar user={currentUser} token={streamToken} size="md" />
+                        <div className="flex-1 min-w-0">
+                            <p className="font-semibold text-sm text-telegram-text truncate">
+                                {currentUser.first_name} {currentUser.last_name || ''}
+                            </p>
+                            {currentUser.username && (
+                                <p className="text-xs text-telegram-subtext truncate">@{currentUser.username}</p>
+                            )}
+                        </div>
+                    </>
+                ) : (
+                    <>
+                        <img src="/logo.png" className="w-8 h-8 rounded-full drop-shadow-lg" alt="Logo" />
+                        <span className="font-bold text-lg text-telegram-text tracking-tight">TgGuild</span>
+                    </>
+                )}
             </div>
 
             <nav className="flex-1 px-2 py-4 space-y-6 overflow-y-auto min-h-0">

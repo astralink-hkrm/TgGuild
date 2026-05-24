@@ -86,6 +86,8 @@ export function AuthWizard({ onLogin }: { onLogin: () => void }) {
                 if (savedId && savedHash) {
                     setApiId(savedId);
                     setApiHash(savedHash);
+                    // Automatically skip setup if we have credentials
+                    setStep("phone");
                 }
             } catch {
                 // config not found, starting fresh

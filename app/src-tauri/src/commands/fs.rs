@@ -726,6 +726,11 @@ pub async fn cmd_download_file(
         });
     }
 
+    // Create parent directories if they don't exist
+    if let Some(parent) = std::path::Path::new(&save_path).parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+
     // Stream download with per-chunk progress
     let mut download_iter = client.iter_download(&media);
     let mut file = std::fs::File::create(&save_path).map_err(|e| e.to_string())?;
@@ -780,29 +785,36 @@ pub async fn cmd_move_files(
     source_folder_id: Option<i64>,
     target_folder_id: Option<i64>,
     state: State<'_, TelegramState>,
-) -> Result<bool, String> {
-    if source_folder_id == target_folder_id { return Ok(true); }
+) -> Result<Vec<i32>, String> {
+    if source_folder_id == target_folder_id { return Ok(message_ids); }
     let client_opt = { state.client.lock().await.clone() };
     if client_opt.is_none() { 
         log::info!("[MOCK] Moved msgs {:?} from {:?} to {:?}", message_ids, source_folder_id, target_folder_id);
-        return Ok(true); 
+        return Ok(message_ids); 
     }
     let client = client_opt.unwrap();
 
     let source_peer = resolve_peer(&client, source_folder_id, &state.peer_cache).await?;
     let target_peer = resolve_peer(&client, target_folder_id, &state.peer_cache).await?;
 
-    match client.forward_messages(&target_peer, &message_ids, &source_peer).await {
-        Ok(_) => {},
+    let forwarded = match client.forward_messages(&target_peer, &message_ids, &source_peer).await {
+        Ok(messages) => messages,
         Err(e) => return Err(format!("Forward failed: {}", e)),
-    }
+    };
+    
+    // Extract new message IDs from the forwarded messages
+    let new_ids: Vec<i32> = forwarded
+        .into_iter()
+        .flatten()
+        .map(|msg| msg.id())
+        .collect();
     
     match client.delete_messages(&source_peer, &message_ids).await {
         Ok(_) => {},
         Err(e) => return Err(format!("Delete original failed: {}", e)),
     }
 
-    Ok(true)
+    Ok(new_ids)
 }
 
 #[tauri::command]

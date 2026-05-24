@@ -162,7 +162,7 @@ export function FileExplorer({
             : <ArrowDown className="w-3 h-3 text-telegram-primary" />;
     };
 
-    const allVisibleSelected = sortedFiles.length > 0 && sortedFiles.every(file => selectedIds.includes(file.id));
+    const allVisibleSelected = sortedFiles.length > 0 && sortedFiles.every(file => selectedIds.includes(file.current_id ?? file.id));
 
     const BulkActions = () => (
         <div className="ml-auto flex flex-wrap items-center justify-end gap-2 animate-in fade-in slide-in-from-top-1">
@@ -292,7 +292,7 @@ export function FileExplorer({
                                             <FileCard
                                                 key={file.id}
                                                 file={file}
-                                                isSelected={selectedIds.includes(file.id)}
+                                                isSelected={selectedIds.includes(file.current_id ?? file.id)}
                                                 onClick={(e) => {
                                                     if (file.type === 'folder') {
                                                         e.stopPropagation();

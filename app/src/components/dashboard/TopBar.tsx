@@ -1,10 +1,9 @@
-import { HardDrive, LayoutGrid, Sun, Moon, Plus } from 'lucide-react';
+import { LayoutGrid, Sun, Moon, Plus } from 'lucide-react';
 import { useTheme } from '../../context/ThemeContext';
 import { MemberStack } from './MemberStack';
 
 interface TopBarProps {
     currentFolderName: string;
-    onDownloadFolder: () => void;
     viewMode: 'grid' | 'list';
     setViewMode: (mode: 'grid' | 'list') => void;
     searchTerm: string;
@@ -15,7 +14,7 @@ interface TopBarProps {
 
 export function TopBar({
     currentFolderName,
-    onDownloadFolder, viewMode, setViewMode, searchTerm, onSearchChange, members = [],
+    viewMode, setViewMode, searchTerm, onSearchChange, members = [],
     onAddSubscriber
 }: TopBarProps) {
     const { theme, toggleTheme } = useTheme();
@@ -57,13 +56,6 @@ export function TopBar({
             </div>
 
             <div className="flex items-center gap-2">
-                <button onClick={onDownloadFolder} className="p-2 hover:bg-telegram-hover rounded-md text-telegram-subtext hover:text-telegram-text transition group relative" title="Download Folder">
-                    <HardDrive className="w-5 h-5" />
-                    <span className="absolute -bottom-8 left-1/2 -translate-x-1/2 text-[10px] bg-telegram-surface border border-telegram-border px-2 py-1 rounded opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none whitespace-nowrap z-50 shadow-lg">
-                        Download All Files
-                    </span>
-                </button>
-
                 <button
                     onClick={() => setViewMode(viewMode === 'grid' ? 'list' : 'grid')}
                     className="p-2 hover:bg-telegram-hover rounded-md text-telegram-subtext hover:text-telegram-text transition relative group"

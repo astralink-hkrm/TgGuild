@@ -135,14 +135,14 @@ export function Dashboard({ onLogout }: { onLogout: () => void }) {
 
     const {
         handleDelete, handleRename, handleBulkDelete, handleBulkDownload,
-        handleBulkMove, handleDownloadFolder, handleGlobalSearch
+        handleBulkMove, handleGlobalSearch
     } = useFileOperations(activeFolderId, activeVirtualFolderId, selectedIds, setSelectedIds, displayedFiles);
 
     const { uploadQueue, setUploadQueue, handleManualUpload, cancelAll: cancelUploads, cancelItem: cancelUploadItem, retryItem: retryUploadItem, isDragging } = useFileUpload(activeFolderId, store, activeVirtualFolderId);
     const { downloadQueue, queueDownload, clearFinished: clearDownloads, cancelAll: cancelDownloads, cancelItem: cancelDownloadItem, retryItem: retryDownloadItem, openWithSystemApp } = useFileDownload(store);
 
     const handleSelectAll = useCallback(() => {
-        const visibleIds = displayedFiles.map(f => f.id);
+        const visibleIds = displayedFiles.map(f => f.current_id ?? f.id);
         const allVisibleSelected = visibleIds.length > 0 && visibleIds.every(id => selectedIds.includes(id));
         setSelectedIds(allVisibleSelected ? [] : visibleIds);
     }, [displayedFiles, selectedIds]);
@@ -229,16 +229,21 @@ export function Dashboard({ onLogout }: { onLogout: () => void }) {
 
     const handleFileClick = (e: React.MouseEvent, id: number) => {
         e.stopPropagation();
+        const file = displayedFiles.find(f => f.id === id);
+        const actualId = file?.current_id ?? id;
+        
         if (e.metaKey || e.ctrlKey) {
-            setSelectedIds(ids => ids.includes(id) ? ids.filter(i => i !== id) : [...ids, id]);
+            setSelectedIds(ids => ids.includes(actualId) ? ids.filter(i => i !== actualId) : [...ids, actualId]);
         } else {
-            setSelectedIds([id]);
+            setSelectedIds([actualId]);
         }
     }
 
     const handleToggleSelection = useCallback((id: number) => {
-        setSelectedIds(ids => ids.includes(id) ? ids.filter(i => i !== id) : [...ids, id]);
-    }, []);
+        const file = displayedFiles.find(f => f.id === id);
+        const actualId = file?.current_id ?? id;
+        setSelectedIds(ids => ids.includes(actualId) ? ids.filter(i => i !== actualId) : [...ids, actualId]);
+    }, [displayedFiles]);
 
     const handleOpenFile = (file: TelegramFile) => {
         if (file.type === 'folder') {
@@ -293,7 +298,9 @@ export function Dashboard({ onLogout }: { onLogout: () => void }) {
 
         if (fileId) {
             try {
-                const idsToMove = selectedIds.includes(fileId) ? selectedIds : [fileId];
+                const file = displayedFiles.find(f => f.id === fileId);
+                const actualFileId = file?.current_id ?? fileId;
+                const idsToMove = selectedIds.includes(actualFileId) ? selectedIds : [actualFileId];
 
                 await invoke('cmd_move_files', {
                     messageIds: idsToMove,
@@ -303,7 +310,7 @@ export function Dashboard({ onLogout }: { onLogout: () => void }) {
 
                 queryClient.invalidateQueries({ queryKey: ['files', activeFolderId] });
 
-                if (selectedIds.includes(fileId)) setSelectedIds([]);
+                if (selectedIds.includes(actualFileId)) setSelectedIds([]);
 
                 toast.success(`Moved ${idsToMove.length} file(s).`);
 
@@ -353,8 +360,12 @@ export function Dashboard({ onLogout }: { onLogout: () => void }) {
                     <MoveToFolderModal
                         virtualFolders={allFiles.filter(f => f.type === 'folder')}
                         onClose={() => setShowMoveModal(false)}
-                        onSelect={handleBulkMove}
+                        onSelect={(targetFolderId, targetVirtualFolderId) => {
+                            handleBulkMove(targetFolderId, targetVirtualFolderId);
+                        }}
                         activeVirtualFolderId={activeVirtualFolderId}
+                        activeFolderId={activeFolderId}
+                        folders={folders}
                         key="move-modal"
                     />
                 )}
@@ -442,7 +453,6 @@ export function Dashboard({ onLogout }: { onLogout: () => void }) {
                     <>
                         <TopBar
                             currentFolderName={currentDrivePath}
-                            onDownloadFolder={handleDownloadFolder}
                             viewMode={viewMode}
                             setViewMode={setViewMode}
                             searchTerm={searchTerm}
