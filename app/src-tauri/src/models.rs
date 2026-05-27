@@ -55,3 +55,10 @@ pub struct Drive {
     pub name: String,
     pub icon: Option<String>,
 }
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct FolderTreeNode {
+    pub id: i64,
+    pub name: String,
+    pub children: Vec<FolderTreeNode>,
+}

@@ -133,6 +133,8 @@ pub fn run() {
             commands::cmd_get_team_messages,
             commands::cmd_download_team_media,
             commands::cmd_pin_team_message,
+            commands::cmd_get_folder_tree,
+            commands::cmd_init_folder_trees,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

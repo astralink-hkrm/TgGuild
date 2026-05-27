@@ -1,10 +1,10 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { AnimatePresence } from 'framer-motion';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { invoke } from '@tauri-apps/api/core';
 import { toast } from 'sonner';
 
-import { TelegramFile, BandwidthStats } from '../types';
+import { TelegramFile, BandwidthStats, FolderTreeNode } from '../types';
 import { formatBytes } from '../utils';
 
 import { Plus } from 'lucide-react';
@@ -112,15 +112,69 @@ export function Dashboard({ onLogout }: { onLogout: () => void }) {
         }
     }, [store, viewMode]);
 
-    const { data: allFiles = [], isLoading, error } = useQuery({
+    // Folder tree query (only for drives, not Saved Messages)
+    const { data: folderTree = [] } = useQuery({
+        queryKey: ['folderTree', activeFolderId],
+        queryFn: () => invoke<FolderTreeNode[]>('cmd_get_folder_tree', { folderId: activeFolderId }),
+        enabled: !!store && activeFolderId !== null,
+    });
+
+    // Files query for current folder
+    const { data: rawFiles = [], isLoading, error } = useQuery({
         queryKey: ['files', activeFolderId, activeVirtualFolderId],
-        queryFn: () => invoke<any[]>('cmd_get_files', { folderId: activeFolderId, virtualFolderId: activeVirtualFolderId }).then(res => res.map(f => ({
+        queryFn: () => invoke<any[]>('cmd_get_files', { folderId: activeFolderId, virtualFolderId: activeVirtualFolderId }),
+        enabled: !!store,
+    });
+
+    // Merge folders from tree + files from backend
+    const allFiles = useMemo(() => {
+        const mappedFiles = rawFiles.map((f: any) => ({
             ...f,
             sizeStr: formatBytes(f.size),
             type: f.icon_type || (f.name.endsWith('/') ? 'folder' : 'file')
-        }))),
-        enabled: !!store,
-    });
+        }));
+
+        if (activeFolderId === null) {
+            // Saved Messages: files query already includes folders
+            return mappedFiles;
+        }
+
+        // Drives: extract subfolders at current level from the tree
+        const findNode = (nodes: FolderTreeNode[], targetId: number): FolderTreeNode | null => {
+            for (const node of nodes) {
+                if (node.id === targetId) return node;
+                const found = findNode(node.children, targetId);
+                if (found) return found;
+            }
+            return null;
+        };
+
+        let children: FolderTreeNode[];
+        if (activeVirtualFolderId === null) {
+            children = folderTree;
+        } else {
+            const node = findNode(folderTree, activeVirtualFolderId);
+            children = node ? node.children : [];
+        }
+
+        const folderItems = children.map((node: FolderTreeNode) => ({
+            id: node.id,
+            name: node.name,
+            type: 'folder' as const,
+            virtual_folder_id: node.id,
+            parent_virtual_folder_id: activeVirtualFolderId,
+            current_id: node.id,
+            size: 0,
+            sizeStr: '0 B',
+            created_at: '',
+            icon_type: 'folder',
+            folder_id: activeFolderId,
+            mime_type: null as string | null,
+            file_ext: null as string | null,
+        }));
+
+        return [...folderItems, ...mappedFiles];
+    }, [folderTree, rawFiles, activeFolderId, activeVirtualFolderId]);
 
     const displayedFiles = searchTerm.length > 2
         ? searchResults
@@ -142,8 +196,8 @@ export function Dashboard({ onLogout }: { onLogout: () => void }) {
     const { downloadQueue, queueDownload, clearFinished: clearDownloads, cancelAll: cancelDownloads, cancelItem: cancelDownloadItem, retryItem: retryDownloadItem, openWithSystemApp } = useFileDownload(store);
 
     const handleSelectAll = useCallback(() => {
-        const visibleIds = displayedFiles.map(f => f.current_id ?? f.id);
-        const allVisibleSelected = visibleIds.length > 0 && visibleIds.every(id => selectedIds.includes(id));
+        const visibleIds = displayedFiles.map((f: TelegramFile) => f.current_id ?? f.id);
+        const allVisibleSelected = visibleIds.length > 0 && visibleIds.every((id: number) => selectedIds.includes(id));
         setSelectedIds(allVisibleSelected ? [] : visibleIds);
     }, [displayedFiles, selectedIds]);
 
@@ -184,7 +238,7 @@ export function Dashboard({ onLogout }: { onLogout: () => void }) {
 
     const handleEnter = useCallback(() => {
         if (selectedIds.length === 1) {
-            const selected = displayedFiles.find(f => (f.current_id ?? f.id) === selectedIds[0]);
+            const selected = displayedFiles.find((f: TelegramFile) => (f.current_id ?? f.id) === selectedIds[0]);
             if (selected && selected.type !== 'folder') {
                 openWithSystemApp(selected.current_id ?? selected.id, selected.name, activeFolderId);
             }
@@ -229,9 +283,9 @@ export function Dashboard({ onLogout }: { onLogout: () => void }) {
 
     const handleFileClick = (e: React.MouseEvent, id: number) => {
         e.stopPropagation();
-        const file = displayedFiles.find(f => f.id === id);
+        const file = displayedFiles.find((f: TelegramFile) => f.id === id);
         const actualId = file?.current_id ?? id;
-        
+
         if (e.metaKey || e.ctrlKey) {
             setSelectedIds(ids => ids.includes(actualId) ? ids.filter(i => i !== actualId) : [...ids, actualId]);
         } else {
@@ -240,7 +294,7 @@ export function Dashboard({ onLogout }: { onLogout: () => void }) {
     }
 
     const handleToggleSelection = useCallback((id: number) => {
-        const file = displayedFiles.find(f => f.id === id);
+        const file = displayedFiles.find((f: TelegramFile) => f.id === id);
         const actualId = file?.current_id ?? id;
         setSelectedIds(ids => ids.includes(actualId) ? ids.filter(i => i !== actualId) : [...ids, actualId]);
     }, [displayedFiles]);
@@ -268,6 +322,7 @@ export function Dashboard({ onLogout }: { onLogout: () => void }) {
                 name: name,
             });
             queryClient.invalidateQueries({ queryKey: ['files', activeFolderId, activeVirtualFolderId] });
+            queryClient.invalidateQueries({ queryKey: ['folderTree', activeFolderId] });
             toast.success('Folder created');
         } catch (e) {
             toast.error(`Failed to create folder: ${e}`);
@@ -299,7 +354,7 @@ export function Dashboard({ onLogout }: { onLogout: () => void }) {
 
         if (fileId) {
             try {
-                const file = displayedFiles.find(f => f.id === fileId);
+                const file = displayedFiles.find((f: TelegramFile) => f.id === fileId);
                 const actualFileId = file?.current_id ?? fileId;
                 const idsToMove = selectedIds.includes(actualFileId) ? selectedIds : [actualFileId];
 
@@ -310,6 +365,8 @@ export function Dashboard({ onLogout }: { onLogout: () => void }) {
                 });
 
                 queryClient.invalidateQueries({ queryKey: ['files', activeFolderId] });
+                if (activeFolderId !== null) queryClient.invalidateQueries({ queryKey: ['folderTree', activeFolderId] });
+                if (targetFolderId !== null) queryClient.invalidateQueries({ queryKey: ['folderTree', targetFolderId] });
 
                 if (selectedIds.includes(actualFileId)) setSelectedIds([]);
 
@@ -359,7 +416,6 @@ export function Dashboard({ onLogout }: { onLogout: () => void }) {
             <AnimatePresence>
                 {showMoveModal && (
                     <MoveToFolderModal
-                        virtualFolders={allFiles.filter(f => f.type === 'folder')}
                         onClose={() => setShowMoveModal(false)}
                         onSelect={(targetFolderId, targetVirtualFolderId) => {
                             handleBulkMove(targetFolderId, targetVirtualFolderId);

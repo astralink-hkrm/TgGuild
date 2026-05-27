@@ -52,3 +52,9 @@ export interface DownloadItem {
     speedBytesPerSec?: number;
 }
 
+export interface FolderTreeNode {
+    id: number;
+    name: string;
+    children: FolderTreeNode[];
+}
+

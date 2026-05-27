@@ -3,12 +3,13 @@ use grammers_client::types::{Media, Peer};
 use grammers_client::InputMessage;
 use grammers_tl_types as tl;
 use crate::TelegramState;
-use crate::models::{FolderMetadata, FileMetadata};
+use crate::models::{FolderMetadata, FileMetadata, FolderTreeNode};
 use crate::bandwidth::BandwidthManager;
 use crate::commands::utils::{resolve_peer, map_error};
 
 const VIRTUAL_FOLDER_PREFIX: &str = "TGGuild_FOLDER_V1:";
 const VIRTUAL_FILE_PREFIX: &str = "TGGuild_FILE_V1:";
+const TREE_PREFIX: &str = "TGGUILD_TREE_V1:";
 
 fn parse_virtual_folder_meta(text: &str) -> Option<(String, Option<i64>, Option<i64>)> {
     let json = text.strip_prefix(VIRTUAL_FOLDER_PREFIX)?;
@@ -67,6 +68,139 @@ fn virtual_file_meta_text(name: &str, parent_id: Option<i64>, current_id: Option
         VIRTUAL_FILE_PREFIX,
         serde_json::json!({ "name": name, "parent_id": parent_id, "current_id": current_id })
     )
+}
+
+fn parse_tree(text: &str) -> Option<Vec<FolderTreeNode>> {
+    let json = text.strip_prefix(TREE_PREFIX)?;
+    serde_json::from_str(json).ok()
+}
+
+fn tree_meta_text(tree: &[FolderTreeNode]) -> String {
+    format!("{}{}", TREE_PREFIX, serde_json::to_string(tree).unwrap_or_default())
+}
+
+struct FolderEntry {
+    id: i64,
+    name: String,
+    parent_id: Option<i64>,
+}
+
+fn next_folder_id(tree: &[FolderTreeNode]) -> i64 {
+    static COUNTER: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(1);
+    loop {
+        let candidate = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if !tree_contains(tree, candidate) {
+            return candidate;
+        }
+    }
+}
+
+fn tree_contains(tree: &[FolderTreeNode], id: i64) -> bool {
+    for node in tree {
+        if node.id == id || tree_contains(&node.children, id) {
+            return true;
+        }
+    }
+    false
+}
+
+async fn read_tree(client: &grammers_client::Client, peer: &Peer) -> Result<Option<Vec<FolderTreeNode>>, String> {
+    let mut msgs = client.iter_messages(peer);
+    while let Some(msg) = msgs.next().await.map_err(|e| e.to_string())? {
+        if msg.pinned() {
+            if let Some(tree) = parse_tree(msg.text()) {
+                return Ok(Some(tree));
+            }
+        }
+    }
+    Ok(None)
+}
+
+async fn write_tree(client: &grammers_client::Client, peer: &Peer, tree: &[FolderTreeNode]) -> Result<(), String> {
+    let text = tree_meta_text(tree);
+    let mut msgs = client.iter_messages(peer);
+    while let Some(msg) = msgs.next().await.map_err(|e| e.to_string())? {
+        if parse_tree(msg.text()).is_some() {
+            let input_peer = match peer {
+                Peer::Channel(c) => tl::enums::InputPeer::Channel(tl::types::InputPeerChannel {
+                    channel_id: c.raw.id,
+                    access_hash: c.raw.access_hash.unwrap_or(0),
+                }),
+                Peer::User(_) => tl::enums::InputPeer::PeerSelf,
+                Peer::Group(_) => return Err("Groups are not supported for file operations.".to_string()),
+            };
+            client.invoke(&tl::functions::messages::EditMessage {
+                no_webpage: true,
+                peer: input_peer,
+                id: msg.id(),
+                message: Some(text),
+                media: None,
+                reply_markup: None,
+                entities: None,
+                schedule_date: None,
+                invert_media: false,
+                quick_reply_shortcut_id: None,
+                schedule_repeat_period: None,
+            }).await.map_err(|e| format!("Failed to update tree: {}", e))?;
+            if !msg.pinned() {
+                client.pin_message(peer, msg.id()).await.map_err(|e| format!("Failed to pin tree: {}", e))?;
+            }
+            return Ok(());
+        }
+    }
+    let sent = client.send_message(peer, InputMessage::new().text(text)).await.map_err(map_error)?;
+    client.pin_message(peer, sent.id()).await.map_err(|e| format!("Failed to pin tree: {}", e))?;
+    Ok(())
+}
+
+fn build_tree_from_entries(entries: &[FolderEntry], parent_id: Option<i64>) -> Vec<FolderTreeNode> {
+    entries.iter()
+        .filter(|e| e.parent_id == parent_id)
+        .map(|e| FolderTreeNode {
+            id: e.id,
+            name: e.name.clone(),
+            children: build_tree_from_entries(entries, Some(e.id)),
+        })
+        .collect()
+}
+
+fn remove_node_return(tree: &mut Vec<FolderTreeNode>, id: i64) -> Option<FolderTreeNode> {
+    let pos = tree.iter().position(|n| n.id == id);
+    if let Some(p) = pos {
+        return Some(tree.remove(p));
+    }
+    for node in tree.iter_mut() {
+        if let Some(n) = remove_node_return(&mut node.children, id) {
+            return Some(n);
+        }
+    }
+    None
+}
+
+fn add_node_to_tree(tree: &mut Vec<FolderTreeNode>, parent_id: i64, new_node: FolderTreeNode) -> bool {
+    for node in tree.iter_mut() {
+        if node.id == parent_id {
+            node.children.push(new_node);
+            return true;
+        }
+        if add_node_to_tree(&mut node.children, parent_id, new_node.clone()) {
+            return true;
+        }
+    }
+    false
+}
+
+fn rename_node_in_tree(tree: &mut Vec<FolderTreeNode>, id: i64, new_name: &str) -> bool {
+    for node in tree.iter_mut() {
+        if node.id == id {
+            node.name = new_name.to_string();
+            return true;
+        }
+        if rename_node_in_tree(&mut node.children, id, new_name) {
+            return true;
+        }
+    }
+    false
 }
 
 #[tauri::command]
@@ -482,7 +616,7 @@ log::info!("[RENAME_FOLDER] folder_id={}, new_name='{}'", folder_id, new_name);
 
 #[tauri::command]
 pub async fn cmd_rename_file(
-    message_id: i32,
+    message_id: i64,
     folder_id: Option<i64>,
     new_name: String,
     state: State<'_, TelegramState>,
@@ -495,8 +629,21 @@ pub async fn cmd_rename_file(
     let client = client_opt.unwrap();
 
     let peer = resolve_peer(&client, folder_id, &state.peer_cache).await?;
+
+    // Drives: try tree-based rename first
+    if folder_id.is_some() {
+        if let Ok(Some(mut tree)) = read_tree(&client, &peer).await {
+            if rename_node_in_tree(&mut tree, message_id, &new_name) {
+                write_tree(&client, &peer, &tree).await?;
+                return Ok(true);
+            }
+        }
+    }
+
+    // Fall through to message-based rename (files or Saved Messages)
+    let msg_id_i32 = message_id as i32;
     if let Some(existing) = client
-        .get_messages_by_id(&peer, &[message_id])
+        .get_messages_by_id(&peer, &[msg_id_i32])
         .await
         .map_err(|e| e.to_string())?
         .into_iter()
@@ -504,6 +651,7 @@ pub async fn cmd_rename_file(
         .next()
     {
         if let Some((_, parent_id, current_id)) = parse_virtual_folder_meta(existing.text()) {
+            // Saved Messages: edit folder metadata message
             let input_peer = match &peer {
                 Peer::Channel(c) => tl::enums::InputPeer::Channel(tl::types::InputPeerChannel {
                     channel_id: c.raw.id,
@@ -515,7 +663,7 @@ pub async fn cmd_rename_file(
             client.invoke(&tl::functions::messages::EditMessage {
                 no_webpage: true,
                 peer: input_peer,
-                id: message_id,
+                id: msg_id_i32,
                 message: Some(virtual_folder_meta_text(&new_name, parent_id, current_id)),
                 media: None,
                 reply_markup: None,
@@ -539,7 +687,7 @@ pub async fn cmd_rename_file(
             client.invoke(&tl::functions::messages::EditMessage {
                 no_webpage: true,
                 peer: input_peer,
-                id: message_id,
+                id: msg_id_i32,
                 message: Some(virtual_file_meta_text(&new_name, parent_id, current_id)),
                 media: None,
                 reply_markup: None,
@@ -568,7 +716,7 @@ pub async fn cmd_rename_file(
     client.invoke(&tl::functions::messages::EditMessage {
         no_webpage: true,
         peer: input_peer,
-        id: message_id,
+        id: msg_id_i32,
         message: Some(new_name),
         media: None,
         reply_markup: None,
@@ -584,7 +732,7 @@ pub async fn cmd_rename_file(
 
 #[tauri::command]
 pub async fn cmd_move_to_virtual_folder(
-    message_ids: Vec<i32>,
+    message_ids: Vec<i64>,
     folder_id: Option<i64>,
     target_virtual_folder_id: Option<i64>,
     state: State<'_, TelegramState>,
@@ -597,10 +745,100 @@ pub async fn cmd_move_to_virtual_folder(
     let client = client_opt.unwrap();
 
     let peer = resolve_peer(&client, folder_id, &state.peer_cache).await?;
-    
-    for message_id in message_ids {
+
+    // Drives: handle tree-managed folder moves first
+    if folder_id.is_some() {
+        let mut tree = read_tree(&client, &peer).await?.unwrap_or_default();
+        let mut tree_changed = false;
+
+        // Separate folder IDs (in tree) from file IDs (real messages)
+        let (tree_ids, file_ids): (Vec<i64>, Vec<i64>) = message_ids.iter()
+            .partition(|&&id| tree_contains(&tree, id));
+
+        // Move folders in tree
+        for &fid in &tree_ids {
+            if let Some(node) = remove_node_return(&mut tree, fid) {
+                if let Some(parent_id) = target_virtual_folder_id {
+                    if !add_node_to_tree(&mut tree, parent_id, node) {
+                        return Err("Target parent folder not found in tree".to_string());
+                    }
+                } else {
+                    tree.push(node);
+                }
+                tree_changed = true;
+            }
+        }
+
+        if tree_changed {
+            write_tree(&client, &peer, &tree).await?;
+        }
+
+        // Handle remaining file IDs with message-based approach
+        for &msg_id in &file_ids {
+            let msg_id_i32 = msg_id as i32;
+            if let Some(existing) = client
+                .get_messages_by_id(&peer, &[msg_id_i32])
+                .await
+                .map_err(|e| e.to_string())?
+                .into_iter()
+                .flatten()
+                .next()
+            {
+                let (name, _, current_id) = if let Some((n, _, c)) = parse_virtual_file_meta(existing.text()) {
+                    (n, None::<i64>, c)
+                } else {
+                    let file_name = if !existing.text().is_empty() {
+                        existing.text().to_string()
+                    } else if let Some(Media::Document(doc)) = existing.media() {
+                        let n = doc.name();
+                        if n.is_empty() { "file".to_string() } else { n.to_string() }
+                    } else {
+                        "file".to_string()
+                    };
+                    (file_name, None::<i64>, Some(existing.id() as i64))
+                };
+
+                let input_peer = match &peer {
+                    Peer::Channel(c) => tl::enums::InputPeer::Channel(tl::types::InputPeerChannel {
+                        channel_id: c.raw.id,
+                        access_hash: c.raw.access_hash.unwrap_or(0),
+                    }),
+                    Peer::User(_) => tl::enums::InputPeer::PeerSelf,
+                    Peer::Group(_) => return Err("Groups are not supported for file operations.".to_string()),
+                };
+
+                let final_cid = if existing.media().is_some() {
+                    Some(existing.id() as i64)
+                } else {
+                    current_id
+                };
+
+                let new_text = virtual_file_meta_text(&name, target_virtual_folder_id, final_cid);
+
+                client.invoke(&tl::functions::messages::EditMessage {
+                    no_webpage: true,
+                    peer: input_peer,
+                    id: msg_id_i32,
+                    message: Some(new_text),
+                    media: None,
+                    reply_markup: None,
+                    entities: None,
+                    schedule_date: None,
+                    invert_media: false,
+                    quick_reply_shortcut_id: None,
+                    schedule_repeat_period: None,
+                }).await.map_err(|e| format!("Failed to move file to virtual folder: {}", e))?;
+            }
+        }
+
+        return Ok(true);
+    }
+
+    // Saved Messages: use message-based approach for all
+    for &msg_id in &message_ids {
+        let msg_id_i32 = msg_id as i32;
         if let Some(existing) = client
-            .get_messages_by_id(&peer, &[message_id])
+            .get_messages_by_id(&peer, &[msg_id_i32])
             .await
             .map_err(|e| e.to_string())?
             .into_iter()
@@ -612,7 +850,6 @@ pub async fn cmd_move_to_virtual_folder(
             } else if let Some((n, _, c)) = parse_virtual_folder_meta(existing.text()) {
                 (n, None::<i64>, c)
             } else {
-                // Regular file without metadata - use the file name or caption
                 let file_name = if !existing.text().is_empty() {
                     existing.text().to_string()
                 } else if let Some(Media::Document(doc)) = existing.media() {
@@ -633,12 +870,8 @@ pub async fn cmd_move_to_virtual_folder(
                 Peer::Group(_) => return Err("Groups are not supported for file operations.".to_string()),
             };
 
-            // Check if it's a folder or file
             let is_folder = parse_virtual_folder_meta(existing.text()).is_some();
-            
-            // If the message HAS media, we refresh current_id to THIS message's ID.
-            // This ensures that after a cross-drive move (where the message was forwarded),
-            // the metadata correctly points to the new message that actually contains the data.
+
             let final_cid = if existing.media().is_some() {
                 Some(existing.id() as i64)
             } else {
@@ -654,7 +887,7 @@ pub async fn cmd_move_to_virtual_folder(
             client.invoke(&tl::functions::messages::EditMessage {
                 no_webpage: true,
                 peer: input_peer,
-                id: message_id,
+                id: msg_id_i32,
                 message: Some(new_text),
                 media: None,
                 reply_markup: None,
@@ -672,7 +905,7 @@ pub async fn cmd_move_to_virtual_folder(
 
 #[tauri::command]
 pub async fn cmd_delete_file(
-    message_id: i32,
+    message_id: i64,
     folder_id: Option<i64>,
     state: State<'_, TelegramState>,
 ) -> Result<bool, String> {
@@ -684,7 +917,21 @@ pub async fn cmd_delete_file(
     let client = client_opt.unwrap();
 
     let peer = resolve_peer(&client, folder_id, &state.peer_cache).await?;
-    client.delete_messages(&peer, &[message_id]).await.map_err(|e| e.to_string())?;
+
+    // Drives: check tree first for folder IDs
+    if folder_id.is_some() {
+        if let Ok(Some(mut tree)) = read_tree(&client, &peer).await {
+            if remove_node_return(&mut tree, message_id).is_some() {
+                write_tree(&client, &peer, &tree).await?;
+                return Ok(true);
+            }
+        }
+    }
+
+    // File or Saved Messages folder: use message-based deletion
+    let msg_id_i32 = message_id as i32;
+    client.delete_messages(&peer, &[msg_id_i32]).await.map_err(|e| e.to_string())?;
+
     Ok(true)
 }
 
@@ -915,7 +1162,13 @@ pub async fn cmd_get_files(
         let text = msg.text();
         
         // 1. Check for Virtual Folder
-        if let Some((name, parent_id, meta_cid)) = parse_virtual_folder_meta(text) {
+        // Drives: folders come from the pinned tree, skip all folder metadata messages
+        // Saved Messages: scan for folder metadata (no pinned tree available)
+        if folder_id.is_some() {
+            if parse_virtual_folder_meta(text).is_some() {
+                continue;
+            }
+        } else if let Some((name, parent_id, meta_cid)) = parse_virtual_folder_meta(text) {
             if parent_id == virtual_folder_id {
                 log::debug!("[cmd_get_files] Found virtual folder: id={}, name={}", msg.id(), name);
                 files.push(FileMetadata {
@@ -960,10 +1213,10 @@ pub async fn cmd_get_files(
                 _ => ("Unknown".to_string(), 0, None, None),
             };
 
-            let mut final_current_id = msg.id() as i64;
+            let final_current_id = msg.id() as i64;
 
-            if let Some((v_name, _)) = virtual_file {
-                name = v_name;
+            if let Some((v_name, _)) = &virtual_file {
+                name = v_name.clone();
                 // If the message HAS media, we ignore the CID in metadata because THIS message is the one to download.
                 // This fixes stale IDs after cross-drive moves.
                 log::debug!("[cmd_get_files] File has media AND metadata. Using current message ID {} for download.", msg.id());
@@ -1040,6 +1293,39 @@ pub async fn cmd_create_virtual_folder(
     }
     let client = client_opt.unwrap();
     let peer = resolve_peer(&client, folder_id, &state.peer_cache).await?;
+
+    if folder_id.is_some() {
+        // Drives: tree-only approach — no folder metadata message sent
+        let mut tree = read_tree(&client, &peer).await?.unwrap_or_default();
+        let id = next_folder_id(&tree);
+        let new_node = FolderTreeNode { id, name: name.clone(), children: vec![] };
+
+        if let Some(parent_id) = parent_virtual_folder_id {
+            if !add_node_to_tree(&mut tree, parent_id, new_node) {
+                return Err("Parent folder not found in tree".to_string());
+            }
+        } else {
+            tree.push(new_node);
+        }
+
+        write_tree(&client, &peer, &tree).await?;
+
+        return Ok(FileMetadata {
+            id,
+            folder_id,
+            virtual_folder_id: Some(id),
+            parent_virtual_folder_id,
+            current_id: Some(id),
+            name,
+            size: 0,
+            mime_type: None,
+            file_ext: None,
+            created_at: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs().to_string(),
+            icon_type: "folder".into(),
+        });
+    }
+
+    // Saved Messages: keep old behavior (send folder metadata message)
     let sent = client
         .send_message(&peer, InputMessage::new().text(virtual_folder_meta_text(&name, parent_virtual_folder_id, None)))
         .await
@@ -1208,6 +1494,73 @@ pub async fn cmd_search_global(
     }
 
     Ok(files)
+}
+
+#[tauri::command]
+pub async fn cmd_get_folder_tree(
+    folder_id: Option<i64>,
+    state: State<'_, TelegramState>,
+) -> Result<Vec<FolderTreeNode>, String> {
+    let client_opt = { state.client.lock().await.clone() };
+    if client_opt.is_none() {
+        return Ok(Vec::new());
+    }
+    let client = client_opt.unwrap();
+
+    if folder_id.is_none() {
+        return Ok(Vec::new());
+    }
+
+    let peer = resolve_peer(&client, folder_id, &state.peer_cache).await?;
+
+    Ok(read_tree(&client, &peer).await?.unwrap_or_default())
+}
+
+#[tauri::command]
+pub async fn cmd_init_folder_trees(
+    state: State<'_, TelegramState>,
+) -> Result<usize, String> {
+    let client_opt = { state.client.lock().await.clone() };
+    if client_opt.is_none() {
+        return Ok(0);
+    }
+    let client = client_opt.unwrap();
+
+    let mut count = 0;
+    let mut dialogs = client.iter_dialogs();
+    while let Some(dialog) = dialogs.next().await.map_err(|e| e.to_string())? {
+        if let Peer::Channel(c) = &dialog.peer {
+            if c.raw.broadcast && c.raw.title.contains("[TD]") {
+                // Check if tree already exists
+                if let Ok(Some(_)) = read_tree(&client, &dialog.peer).await {
+                    count += 1; // already migrated
+                    continue;
+                }
+
+                // Build initial tree from existing folder metadata messages (one-time migration)
+                let mut entries = Vec::new();
+                let mut msgs = client.iter_messages(&dialog.peer);
+                while let Some(msg) = msgs.next().await.map_err(|e| e.to_string())? {
+                    if let Some((name, parent_id, _)) = parse_virtual_folder_meta(msg.text()) {
+                        entries.push(FolderEntry {
+                            id: msg.id() as i64,
+                            name,
+                            parent_id,
+                        });
+                    }
+                }
+
+                let tree = build_tree_from_entries(&entries, None);
+                if let Err(e) = write_tree(&client, &dialog.peer, &tree).await {
+                    log::warn!("Failed to init tree for '{}': {}", c.raw.title, e);
+                } else {
+                    count += 1;
+                }
+            }
+        }
+    }
+
+    Ok(count)
 }
 
 #[tauri::command]

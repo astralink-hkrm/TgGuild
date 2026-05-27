@@ -1,10 +1,9 @@
 import { useState, useEffect } from 'react';
 import { Plus, Folder, ChevronDown, ChevronRight, Loader2, HardDrive, LayoutGrid } from 'lucide-react';
-import { TelegramFile, TelegramFolder } from '../../types';
+import { TelegramFolder, FolderTreeNode } from '../../types';
 import { invoke } from '@tauri-apps/api/core';
 
 interface MoveToFolderModalProps {
-    virtualFolders: TelegramFile[];
     onClose: () => void;
     onSelect: (targetFolderId: number | null, targetVirtualFolderId: number | null) => void;
     activeVirtualFolderId: number | null;
@@ -12,64 +11,36 @@ interface MoveToFolderModalProps {
     folders: TelegramFolder[];
 }
 
-interface DriveFolder {
-    id: number | null;
-    name: string;
-    isExpanded: boolean;
-    virtualFolders: TelegramFile[];
-}
-
-export function MoveToFolderModal({ virtualFolders, onClose, onSelect, activeVirtualFolderId, activeFolderId, folders }: MoveToFolderModalProps) {
+export function MoveToFolderModal({ onClose, onSelect, activeVirtualFolderId, activeFolderId, folders }: MoveToFolderModalProps) {
     const [isMoving, setIsMoving] = useState(false);
     const [expandedDrives, setExpandedDrives] = useState<Set<number | null>>(new Set([activeFolderId]));
     const [expandedVirtualFolders, setExpandedVirtualFolders] = useState<Set<string>>(new Set());
-    const [allVirtualFolders, setAllVirtualFolders] = useState<Map<number | null, TelegramFile[]>>(new Map());
+    const [folderTrees, setFolderTrees] = useState<Map<number | null, FolderTreeNode[]>>(new Map());
     const [selectedDestination, setSelectedDestination] = useState<{ folderId: number | null; virtualFolderId: number | null } | null>(null);
 
     useEffect(() => {
-        loadAllVirtualFolders();
+        loadAllFolderTrees();
     }, [folders]);
 
-    const loadAllVirtualFolders = async () => {
+    const loadAllFolderTrees = async () => {
+        const trees = new Map<number | null, FolderTreeNode[]>();
         try {
-            const virtualFoldersMap = new Map<number | null, TelegramFile[]>();
-            
-            // Load for Saved Messages
-            const savedMessagesVirtual = await invoke<any[]>('cmd_get_files', { folderId: null, virtualFolderId: null });
-            virtualFoldersMap.set(null, savedMessagesVirtual.filter(f => f.name.endsWith('/') || f.icon_type === 'folder'));
-            
-            // Load for each drive
+            const savedMessagesTree = await invoke<FolderTreeNode[]>('cmd_get_folder_tree', { folderId: null });
+            trees.set(null, savedMessagesTree);
+
             for (const folder of folders) {
-                const driveVirtual = await invoke<any[]>('cmd_get_files', { folderId: folder.id, virtualFolderId: null });
-                virtualFoldersMap.set(folder.id, driveVirtual.filter(f => f.name.endsWith('/') || f.icon_type === 'folder'));
+                try {
+                    const tree = await invoke<FolderTreeNode[]>('cmd_get_folder_tree', { folderId: folder.id });
+                    trees.set(folder.id, tree);
+                } catch (e) {
+                    console.error(`Failed to load folder tree for drive ${folder.id}:`, e);
+                    trees.set(folder.id, []);
+                }
             }
-            
-            setAllVirtualFolders(virtualFoldersMap);
         } catch (e) {
-            console.error('Failed to load virtual folders:', e);
+            console.error('Failed to load folder trees:', e);
         }
-    };
-
-    const loadSubfolders = async (folderId: number | null, virtualFolderId: number) => {
-        const key = `${folderId}-${virtualFolderId}`;
-        if (expandedVirtualFolders.has(key)) {
-            // Already loaded, just toggle
-            return;
-        }
-
-        try {
-            const subfolders = await invoke<any[]>('cmd_get_files', { folderId, virtualFolderId });
-            const folders = subfolders.filter(f => f.name.endsWith('/') || f.icon_type === 'folder');
-            
-            // Update the map with subfolders
-            setAllVirtualFolders(prev => {
-                const newMap = new Map(prev);
-                newMap.set(virtualFolderId, folders);
-                return newMap;
-            });
-        } catch (e) {
-            console.error('Failed to load subfolders:', e);
-        }
+        setFolderTrees(trees);
     };
 
     const toggleDrive = (driveId: number | null) => {
@@ -84,13 +55,8 @@ export function MoveToFolderModal({ virtualFolders, onClose, onSelect, activeVir
         });
     };
 
-    const toggleVirtualFolder = async (folderId: number | null, virtualFolderId: number) => {
+    const toggleVirtualFolder = (folderId: number | null, virtualFolderId: number) => {
         const key = `${folderId}-${virtualFolderId}`;
-        
-        if (!expandedVirtualFolders.has(key)) {
-            await loadSubfolders(folderId, virtualFolderId);
-        }
-        
         setExpandedVirtualFolders(prev => {
             const newSet = new Set(prev);
             if (newSet.has(key)) {
@@ -104,7 +70,6 @@ export function MoveToFolderModal({ virtualFolders, onClose, onSelect, activeVir
 
     const handleMove = async () => {
         if (!selectedDestination) return;
-        
         setIsMoving(true);
         try {
             await onSelect(selectedDestination.folderId, selectedDestination.virtualFolderId);
@@ -114,61 +79,60 @@ export function MoveToFolderModal({ virtualFolders, onClose, onSelect, activeVir
         }
     };
 
-    const renderVirtualFolder = (folder: TelegramFile, folderId: number | null, level: number = 0) => {
-        const key = `${folderId}-${folder.id}`;
-        const isExpanded = expandedVirtualFolders.has(key);
-        const subfolders = allVirtualFolders.get(folder.id) || [];
-        const hasSubfolders = subfolders.length > 0 || !expandedVirtualFolders.has(key);
-        const isCurrentLocation = folderId === activeFolderId && folder.id === activeVirtualFolderId;
-        const isSelected = selectedDestination?.folderId === folderId && selectedDestination?.virtualFolderId === folder.id;
+    const renderTreeNodes = (nodes: FolderTreeNode[], parentDriveId: number | null, level: number = 0) => {
+        return nodes.map(node => {
+            const key = `${parentDriveId}-${node.id}`;
+            const isExpanded = expandedVirtualFolders.has(key);
+            const hasChildren = node.children.length > 0;
+            const isCurrentLocation = parentDriveId === activeFolderId && node.id === activeVirtualFolderId;
+            const isSelected = selectedDestination?.folderId === parentDriveId && selectedDestination?.virtualFolderId === node.id;
 
-        return (
-            <div key={folder.id}>
-                <div
-                    className={`w-full flex items-center gap-2 px-3 py-2 text-sm transition-colors ${
-                        isCurrentLocation
-                            ? 'opacity-50 cursor-not-allowed'
-                            : isSelected
-                            ? 'bg-telegram-primary/20 text-telegram-primary'
-                            : 'text-telegram-text hover:bg-telegram-hover cursor-pointer'
-                    }`}
-                    style={{ paddingLeft: `${(level + 2) * 12}px` }}
-                >
-                    {hasSubfolders ? (
-                        <button
-                            onClick={(e) => {
-                                e.stopPropagation();
-                                toggleVirtualFolder(folderId, folder.id);
-                            }}
-                            className="p-0.5 hover:bg-telegram-border rounded flex-shrink-0"
-                        >
-                            {isExpanded ? (
-                                <ChevronDown className="w-3 h-3" />
-                            ) : (
-                                <ChevronRight className="w-3 h-3" />
-                            )}
-                        </button>
-                    ) : (
-                        <div className="w-4 flex-shrink-0" />
-                    )}
+            return (
+                <div key={node.id}>
                     <div
-                        onClick={() => {
-                            if (!isCurrentLocation) {
-                                setSelectedDestination({ folderId, virtualFolderId: folder.id });
-                            }
-                        }}
-                        className="flex items-center gap-2 flex-1 min-w-0"
+                        className={`w-full flex items-center gap-2 px-3 py-2 text-sm transition-colors ${
+                            isCurrentLocation
+                                ? 'opacity-50 cursor-not-allowed'
+                                : isSelected
+                                ? 'bg-telegram-primary/20 text-telegram-primary'
+                                : 'text-telegram-text hover:bg-telegram-hover cursor-pointer'
+                        }`}
+                        style={{ paddingLeft: `${(level + 2) * 12}px` }}
                     >
-                        <Folder className="w-4 h-4 flex-shrink-0" />
-                        <span className="truncate">{folder.name.replace('/', '')}</span>
+                        {hasChildren ? (
+                            <button
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    toggleVirtualFolder(parentDriveId, node.id);
+                                }}
+                                className="p-0.5 hover:bg-telegram-border rounded flex-shrink-0"
+                            >
+                                {isExpanded ? (
+                                    <ChevronDown className="w-3 h-3" />
+                                ) : (
+                                    <ChevronRight className="w-3 h-3" />
+                                )}
+                            </button>
+                        ) : (
+                            <div className="w-4 flex-shrink-0" />
+                        )}
+                        <div
+                            onClick={() => {
+                                if (!isCurrentLocation) {
+                                    setSelectedDestination({ folderId: parentDriveId, virtualFolderId: node.id });
+                                }
+                            }}
+                            className="flex items-center gap-2 flex-1 min-w-0"
+                        >
+                            <Folder className="w-4 h-4 flex-shrink-0" />
+                            <span className="truncate">{node.name}</span>
+                        </div>
                     </div>
+
+                    {isExpanded && hasChildren && renderTreeNodes(node.children, parentDriveId, level + 1)}
                 </div>
-                
-                {isExpanded && subfolders.map(subfolder => 
-                    renderVirtualFolder(subfolder, folderId, level + 1)
-                )}
-            </div>
-        );
+            );
+        });
     };
 
     return (
@@ -196,7 +160,7 @@ export function MoveToFolderModal({ virtualFolders, onClose, onSelect, activeVir
                             <LayoutGrid className="w-4 h-4" />
                             <span>Saved Messages</span>
                         </button>
-                        
+
                         {expandedDrives.has(null) && (
                             <div>
                                 <button
@@ -214,10 +178,8 @@ export function MoveToFolderModal({ virtualFolders, onClose, onSelect, activeVir
                                     <Folder className="w-4 h-4" />
                                     <span>Root</span>
                                 </button>
-                                
-                                {(allVirtualFolders.get(null) || []).map(folder => 
-                                    renderVirtualFolder(folder, null, 0)
-                                )}
+
+                                {renderTreeNodes(folderTrees.get(null) || [], null, 0)}
                             </div>
                         )}
                     </div>
@@ -237,7 +199,7 @@ export function MoveToFolderModal({ virtualFolders, onClose, onSelect, activeVir
                                 <HardDrive className="w-4 h-4" />
                                 <span>{drive.name}</span>
                             </button>
-                            
+
                             {expandedDrives.has(drive.id) && (
                                 <div>
                                     <button
@@ -255,10 +217,8 @@ export function MoveToFolderModal({ virtualFolders, onClose, onSelect, activeVir
                                         <Folder className="w-4 h-4" />
                                         <span>Root</span>
                                     </button>
-                                    
-                                    {(allVirtualFolders.get(drive.id) || []).map(folder => 
-                                        renderVirtualFolder(folder, drive.id, 0)
-                                    )}
+
+                                    {renderTreeNodes(folderTrees.get(drive.id) || [], drive.id, 0)}
                                 </div>
                             )}
                         </div>

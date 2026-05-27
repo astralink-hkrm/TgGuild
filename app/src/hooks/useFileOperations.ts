@@ -2,7 +2,16 @@ import { invoke } from '@tauri-apps/api/core';
 import { useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { useConfirm } from '../context/ConfirmContext';
-import { TelegramFile } from '../types';
+import { TelegramFile, FolderTreeNode } from '../types';
+
+function findFolderInTree(nodes: FolderTreeNode[], id: number): FolderTreeNode | null {
+    for (const node of nodes) {
+        if (node.id === id) return node;
+        const found = findFolderInTree(node.children, id);
+        if (found) return found;
+    }
+    return null;
+}
 
 export function useFileOperations(
     activeFolderId: number | null,
@@ -14,11 +23,18 @@ export function useFileOperations(
     const queryClient = useQueryClient();
     const { confirm } = useConfirm();
 
+    const invalidateCurrent = () => {
+        queryClient.invalidateQueries({ queryKey: ['files', activeFolderId, activeVirtualFolderId] });
+        if (activeFolderId !== null) {
+            queryClient.invalidateQueries({ queryKey: ['folderTree', activeFolderId] });
+        }
+    };
+
     const handleDelete = async (id: number) => {
         if (!await confirm({ title: "Delete File", message: "Are you sure you want to delete this file?", confirmText: "Delete", variant: 'danger' })) return;
         try {
             await invoke('cmd_delete_file', { messageId: id, folderId: activeFolderId });
-            queryClient.invalidateQueries({ queryKey: ['files', activeFolderId, activeVirtualFolderId] });
+            invalidateCurrent();
             toast.success("File deleted");
         } catch (e) {
             toast.error(`Delete failed: ${e}`);
@@ -28,11 +44,35 @@ export function useFileOperations(
     const handleRename = async (id: number, newName: string) => {
         try {
             await invoke('cmd_rename_file', { messageId: id, folderId: activeFolderId, newName });
-            queryClient.invalidateQueries({ queryKey: ['files', activeFolderId, activeVirtualFolderId] });
+            invalidateCurrent();
             toast.success("File renamed");
         } catch (e) {
             toast.error(`Rename failed: ${e}`);
         }
+    };
+
+    const getSubfolderIds = async (virtualFolderId: number): Promise<number[]> => {
+        if (activeFolderId !== null) {
+            const tree = await invoke<FolderTreeNode[]>('cmd_get_folder_tree', { folderId: activeFolderId });
+            const node = findFolderInTree(tree, virtualFolderId);
+            return node ? node.children.map(c => c.id) : [];
+        }
+        const contents = await invoke<any[]>('cmd_get_files', { folderId: activeFolderId, virtualFolderId });
+        return contents.filter((f: any) => f.icon_type === 'folder' || f.name.endsWith('/')).map((f: any) => f.id);
+    };
+
+    const getSubfolderNodes = async (virtualFolderId: number): Promise<FolderTreeNode[]> => {
+        if (activeFolderId !== null) {
+            const tree = await invoke<FolderTreeNode[]>('cmd_get_folder_tree', { folderId: activeFolderId });
+            const node = findFolderInTree(tree, virtualFolderId);
+            return node ? node.children : [];
+        }
+        const contents = await invoke<any[]>('cmd_get_files', { folderId: activeFolderId, virtualFolderId });
+        return contents.filter((f: any) => f.icon_type === 'folder' || f.name.endsWith('/')).map((f: any) => ({
+            id: f.id,
+            name: f.name.replace('/', ''),
+            children: [],
+        }));
     };
 
     const handleBulkDelete = async () => {
@@ -50,174 +90,144 @@ export function useFileOperations(
             }
         }
         setSelectedIds([]);
-        queryClient.invalidateQueries({ queryKey: ['files', activeFolderId, activeVirtualFolderId] });
+        invalidateCurrent();
         if (success > 0) toast.success(`Deleted ${success} files.`);
         if (fail > 0) toast.error(`Failed to delete ${fail} files.`);
     }
 
     const handleDownload = async (id: number, name: string) => {
-        console.log(`[useFileOperations] handleDownload start: id=${id}, name=${name}`);
         try {
-            const savePath = await import('@tauri-apps/plugin-dialog').then(d => d.save({
-                defaultPath: name,
-            }));
-            if (!savePath) {
-                console.log(`[useFileOperations] handleDownload cancelled by user`);
-                return;
-            }
-            console.log(`[useFileOperations] handleDownload savePath: ${savePath}`);
+            const savePath = await import('@tauri-apps/plugin-dialog').then(d => d.save({ defaultPath: name }));
+            if (!savePath) return;
             toast.info(`Download started: ${name}`);
             await invoke('cmd_download_file', { messageId: id, savePath, folderId: activeFolderId });
-            console.log(`[useFileOperations] handleDownload success: ${name}`);
             toast.success(`Download complete: ${name}`);
         } catch (e) {
-            console.error(`[useFileOperations] handleDownload failed:`, e);
             toast.error(`Download failed: ${e}`);
         }
     }
 
     const handleBulkDownload = async () => {
-        console.log(`[useFileOperations] handleBulkDownload start. selectedIds:`, selectedIds);
         if (selectedIds.length === 0) return;
-        
+
         try {
             const dirPath = await import('@tauri-apps/plugin-dialog').then(d => d.open({
                 directory: true, multiple: false, title: "Select Download Destination"
             }));
-            if (!dirPath) {
-                console.log(`[useFileOperations] handleBulkDownload cancelled: no directory selected`);
-                return;
-            }
-            console.log(`[useFileOperations] handleBulkDownload destination: ${dirPath}`);
-            
+            if (!dirPath) return;
+
             const itemsToDownload = displayedFiles.filter((f) => selectedIds.includes(f.current_id ?? f.id));
             const files = itemsToDownload.filter(f => f.type !== 'folder');
             const folders = itemsToDownload.filter(f => f.type === 'folder');
-            
-            console.log(`[useFileOperations] handleBulkDownload items: ${files.length} files, ${folders.length} folders`);
 
             let totalFiles = files.length;
             let downloadedCount = 0;
-            
-            // Count total files including those in folders
+
             for (const folder of folders) {
-                console.log(`[useFileOperations] Counting files in folder: ${folder.name}`);
                 const count = await countFilesInFolder(folder.id);
                 totalFiles += count;
             }
-            
-            console.log(`[useFileOperations] Total files to download: ${totalFiles}`);
+
             toast.info(`Starting download of ${totalFiles} file(s)...`);
-            
-            // Download individual files
+
             for (const file of files) {
                 const filePath = `${dirPath}/${file.name}`;
                 const messageId = file.current_id ?? file.id;
-                console.log(`[useFileOperations] Downloading file: ${file.name} (messageId: ${messageId})`);
                 try {
                     toast.info(`Downloading: ${file.name}`, { duration: 1000 });
-                    await invoke('cmd_download_file', { 
-                        messageId, 
-                        savePath: filePath, 
-                        folderId: activeFolderId 
-                    });
-                    console.log(`[useFileOperations] Successfully downloaded: ${file.name}`);
+                    await invoke('cmd_download_file', { messageId, savePath: filePath, folderId: activeFolderId });
                     downloadedCount++;
                 } catch (e) {
                     const errorStr = String(e);
-                    console.error(`[useFileOperations] Failed to download ${file.name}:`, e);
-                    // Silently skip folder metadata messages
                     if (!errorStr.includes('No media in message')) {
-                        // console.error(`Failed to download ${file.name}:`, e);
+                        console.error(`Failed to download ${file.name}:`, e);
                     }
                 }
             }
-            
-            // Download folders recursively
+
             for (const folder of folders) {
                 const folderPath = `${dirPath}/${folder.name.replace('/', '')}`;
-                console.log(`[useFileOperations] Downloading folder recursively: ${folder.name} to ${folderPath}`);
                 const count = await downloadFolderRecursively(folder, folderPath, activeFolderId);
                 downloadedCount += count;
             }
-            
-            console.log(`[useFileOperations] Bulk download complete. ${downloadedCount} of ${totalFiles} downloaded.`);
+
             toast.success(`Downloaded ${downloadedCount} of ${totalFiles} file(s).`);
             setSelectedIds([]);
         } catch (e) {
-            console.error(`[useFileOperations] Bulk download error:`, e);
             toast.error(`Bulk download failed: ${e}`);
         }
     };
-    
+
     const countFilesInFolder = async (virtualFolderId: number): Promise<number> => {
         try {
-            const contents = await invoke<any[]>('cmd_get_files', { 
-                folderId: activeFolderId, 
-                virtualFolderId 
+            const contents = await invoke<any[]>('cmd_get_files', {
+                folderId: activeFolderId,
+                virtualFolderId
             });
-            
-            const files = contents.filter(f => f.type !== 'folder');
-            const subFolders = contents.filter(f => f.type === 'folder');
-            
+            const files = contents.filter((f: any) => f.icon_type !== 'folder' && !f.name.endsWith('/'));
             let count = files.length;
-            for (const subFolder of subFolders) {
-                count += await countFilesInFolder(subFolder.id);
+
+            const subIds = await getSubfolderIds(virtualFolderId);
+            for (const subId of subIds) {
+                count += await countFilesInFolder(subId);
             }
-            
+
             return count;
         } catch (e) {
             console.error('Failed to count files:', e);
             return 0;
         }
     };
-    
+
     const downloadFolderRecursively = async (
-        folder: TelegramFile, 
-        folderPath: string, 
+        folder: TelegramFile,
+        folderPath: string,
         folderId: number | null
     ): Promise<number> => {
         let downloadedCount = 0;
-        
+
         try {
-            // Get folder contents
-            const contents = await invoke<any[]>('cmd_get_files', { 
-                folderId, 
-                virtualFolderId: folder.id 
+            const contents = await invoke<any[]>('cmd_get_files', {
+                folderId,
+                virtualFolderId: folder.id
             });
-            
-            const files = contents.filter(f => f.type !== 'folder');
-            const subFolders = contents.filter(f => f.type === 'folder');
-            
-            // Download files in this folder
+
+            const files = contents.filter((f: any) => f.icon_type !== 'folder' && !f.name.endsWith('/'));
+
             for (const file of files) {
-                // Create folder path by downloading first file with folder structure
                 const filePath = `${folderPath}/${file.name}`;
                 try {
                     const displayPath = folderPath.split('/').slice(-2).join('/') + '/' + file.name;
                     toast.info(`Downloading: ${displayPath}`, { duration: 1000 });
-                    await invoke('cmd_download_file', { 
-                        messageId: file.current_id ?? file.id, 
-                        savePath: filePath, 
-                        folderId 
+                    await invoke('cmd_download_file', {
+                        messageId: file.current_id ?? file.id,
+                        savePath: filePath,
+                        folderId
                     });
                     downloadedCount++;
                 } catch (e) {
                     const errorStr = String(e);
-                    // Silently skip folder metadata messages
                     if (!errorStr.includes('No media in message')) {
                         console.error(`Failed to download ${file.name}:`, e);
                     }
                 }
             }
-            
-            // Recursively download subfolders
-            for (const subFolder of subFolders) {
-                const subFolderPath = `${folderPath}/${subFolder.name.replace('/', '')}`;
-                const count = await downloadFolderRecursively(subFolder, subFolderPath, folderId);
+
+            const children = await getSubfolderNodes(folder.id);
+            for (const child of children) {
+                const subFolderPath = `${folderPath}/${child.name}`;
+                const childFolder: TelegramFile = {
+                    id: child.id,
+                    name: child.name,
+                    type: 'folder',
+                    size: 0,
+                    sizeStr: '0 B',
+                    current_id: child.id,
+                };
+                const count = await downloadFolderRecursively(childFolder, subFolderPath, folderId);
                 downloadedCount += count;
             }
-            
+
             return downloadedCount;
         } catch (e) {
             console.error(`Failed to download folder ${folder.name}:`, e);
@@ -227,56 +237,37 @@ export function useFileOperations(
 
     const handleBulkMove = async (targetFolderId: number | null, targetVirtualFolderId: number | null, onSuccess?: () => void) => {
         if (selectedIds.length === 0) return;
-        
-        console.log('[handleBulkMove] Starting move:', {
-            selectedIds,
-            activeFolderId,
-            activeVirtualFolderId,
-            targetFolderId,
-            targetVirtualFolderId
-        });
-        
-        // Log the actual files being moved
+
         const filesToMove = displayedFiles.filter(f => selectedIds.includes(f.current_id ?? f.id));
-        console.log('[handleBulkMove] Files to move:', filesToMove.map(f => ({
-            name: f.name,
-            id: f.id,
-            current_id: f.current_id,
-            type: f.type,
-            using_id: f.current_id ?? f.id
-        })));
-        
-        // Check if any selected items are folders
+
         const folders = filesToMove.filter(f => f.type === 'folder');
-        const files = filesToMove.filter(f => f.type !== 'folder');
-        
+
         if (folders.length > 0) {
-            // Recursive folder move
             const folderNames = folders.map(f => f.name).join(', ');
-            
-            if (!await confirm({ 
-                title: "Move Folder with Contents", 
-                message: `Moving folder(s): ${folderNames}\n\nThis will move all files inside recursively. Continue?`, 
-                confirmText: "Move All", 
-                variant: 'info' 
+
+            if (!await confirm({
+                title: "Move Folder with Contents",
+                message: `Moving folder(s): ${folderNames}\n\nThis will move all files inside recursively. Continue?`,
+                confirmText: "Move All",
+                variant: 'info'
             })) {
                 return;
             }
-            
+
             toast.info('Moving folder contents recursively...');
-            
+
             try {
-                // For each folder, get all files inside recursively and move them
                 for (const folder of folders) {
                     await moveFolderRecursively(folder, targetFolderId, targetVirtualFolderId);
                 }
-                
+
                 toast.success(`Moved ${folders.length} folder(s) with all contents.`);
-                
-                // Invalidate queries
+
                 queryClient.invalidateQueries({ queryKey: ['files', activeFolderId, activeVirtualFolderId] });
                 queryClient.invalidateQueries({ queryKey: ['files', targetFolderId, targetVirtualFolderId] });
-                
+                if (activeFolderId !== null) queryClient.invalidateQueries({ queryKey: ['folderTree', activeFolderId] });
+                if (targetFolderId !== null) queryClient.invalidateQueries({ queryKey: ['folderTree', targetFolderId] });
+
                 setSelectedIds([]);
                 if (onSuccess) onSuccess();
                 return;
@@ -286,32 +277,16 @@ export function useFileOperations(
                 return;
             }
         }
-        
-        // Regular file move (no folders)
+
         try {
-            // Check if moving to a different drive or within the same drive
             if (targetFolderId !== activeFolderId) {
-                // Moving to a different drive (cross-drive move)
-                console.log('[handleBulkMove] Cross-drive move');
-                console.log('[handleBulkMove] Using message IDs:', selectedIds);
-                
-                // Move files and get the new message IDs
                 const newMessageIds = await invoke<number[]>('cmd_move_files', {
                     messageIds: selectedIds,
                     sourceFolderId: activeFolderId,
                     targetFolderId: targetFolderId
                 });
-                
-                console.log('[handleBulkMove] Got new message IDs:', newMessageIds);
-                
-                // If target has a virtual folder, move to it using the NEW message IDs
+
                 if (targetVirtualFolderId !== null && newMessageIds.length > 0) {
-                    console.log('[handleBulkMove] Moving to virtual folder with new IDs:', {
-                        newMessageIds,
-                        targetFolderId,
-                        targetVirtualFolderId
-                    });
-                    
                     try {
                         await invoke('cmd_move_to_virtual_folder', {
                             messageIds: newMessageIds,
@@ -326,37 +301,29 @@ export function useFileOperations(
                 } else {
                     toast.success(`Moved ${selectedIds.length} file(s) to ${targetFolderId === null ? 'Saved Messages' : 'target drive'}.`);
                 }
-                
-                // Invalidate target folder queries
+
                 queryClient.invalidateQueries({ queryKey: ['files', targetFolderId, targetVirtualFolderId] });
             } else {
-                // Moving within the same drive to a virtual folder
-                console.log('[handleBulkMove] Same-drive move to virtual folder');
-                console.log('[handleBulkMove] Using message IDs:', selectedIds);
                 await invoke('cmd_move_to_virtual_folder', {
                     messageIds: selectedIds,
                     folderId: activeFolderId,
                     targetVirtualFolderId: targetVirtualFolderId
                 });
-                
+
                 toast.success(`Moved ${selectedIds.length} file(s).`);
-                
-                // Invalidate target virtual folder
+
                 if (targetVirtualFolderId !== null) {
                     queryClient.invalidateQueries({ queryKey: ['files', activeFolderId, targetVirtualFolderId] });
                 }
             }
-            
-            // Invalidate source queries
+
             queryClient.invalidateQueries({ queryKey: ['files', activeFolderId, activeVirtualFolderId] });
-            
+            if (activeFolderId !== null) queryClient.invalidateQueries({ queryKey: ['folderTree', activeFolderId] });
+            if (targetFolderId !== null) queryClient.invalidateQueries({ queryKey: ['folderTree', targetFolderId] });
+
             setSelectedIds([]);
             if (onSuccess) onSuccess();
         } catch (e) {
-            console.error('[handleBulkMove] Error:', e);
-            console.error('[handleBulkMove] Error type:', typeof e);
-            console.error('[handleBulkMove] Error details:', JSON.stringify(e, null, 2));
-            
             const errorStr = String(e);
             if (errorStr.includes('MESSAGE_ID_INVALID')) {
                 if (errorStr.includes('forwardMessages')) {
@@ -369,25 +336,18 @@ export function useFileOperations(
             }
         }
     };
-    
+
     const moveFolderRecursively = async (folder: TelegramFile, targetFolderId: number | null, targetVirtualFolderId: number | null) => {
-        // Get all files in this folder
-        const folderContents = await invoke<any[]>('cmd_get_files', { 
-            folderId: activeFolderId, 
-            virtualFolderId: folder.id 
+        const folderContents = await invoke<any[]>('cmd_get_files', {
+            folderId: activeFolderId,
+            virtualFolderId: folder.id
         });
-        
-        console.log(`[moveFolderRecursively] Moving folder ${folder.name} with ${folderContents.length} items`);
-        
-        // Separate files and subfolders
-        const subFiles = folderContents.filter(f => !f.name.endsWith('/') && f.icon_type !== 'folder');
-        const subFolders = folderContents.filter(f => f.name.endsWith('/') || f.icon_type === 'folder');
-        
-        // If moving to a different drive, we need to recreate the folder structure
+
+        const subFiles = folderContents.filter((f: any) => f.icon_type !== 'folder' && !f.name.endsWith('/'));
+
         let newFolderId = targetVirtualFolderId;
-        
+
         if (targetFolderId !== activeFolderId) {
-            // Cross-drive move: create the folder in the target drive first
             try {
                 const createdFolder = await invoke<any>('cmd_create_virtual_folder', {
                     folderId: targetFolderId,
@@ -395,13 +355,11 @@ export function useFileOperations(
                     name: folder.name.replace('/', '')
                 });
                 newFolderId = createdFolder.virtual_folder_id || createdFolder.id;
-                console.log(`[moveFolderRecursively] Created folder ${folder.name} in target, new ID: ${newFolderId}`);
             } catch (e) {
                 console.error(`[moveFolderRecursively] Failed to create folder:`, e);
                 throw new Error(`Failed to create folder ${folder.name}: ${e}`);
             }
         } else {
-            // Same drive: just move the folder metadata
             const folderMessageId = folder.current_id ?? folder.id;
             await invoke('cmd_move_to_virtual_folder', {
                 messageIds: [folderMessageId],
@@ -410,20 +368,17 @@ export function useFileOperations(
             });
             newFolderId = folder.id;
         }
-        
-        // Move all files in this folder
+
         if (subFiles.length > 0) {
-            const fileIds = subFiles.map(f => f.current_id ?? f.id);
-            console.log(`[moveFolderRecursively] Moving ${subFiles.length} files`);
-            
+            const fileIds = subFiles.map((f: any) => f.current_id ?? f.id);
+
             if (targetFolderId !== activeFolderId) {
-                // Cross-drive: move files and then organize into folder
                 const newFileIds = await invoke<number[]>('cmd_move_files', {
                     messageIds: fileIds,
                     sourceFolderId: activeFolderId,
                     targetFolderId: targetFolderId
                 });
-                
+
                 if (newFolderId && newFileIds.length > 0) {
                     await invoke('cmd_move_to_virtual_folder', {
                         messageIds: newFileIds,
@@ -432,7 +387,6 @@ export function useFileOperations(
                     });
                 }
             } else {
-                // Same drive: just update parent
                 await invoke('cmd_move_to_virtual_folder', {
                     messageIds: fileIds,
                     folderId: activeFolderId,
@@ -440,16 +394,23 @@ export function useFileOperations(
                 });
             }
         }
-        
-        // Recursively move subfolders
-        for (const subFolder of subFolders) {
-            await moveFolderRecursively(subFolder, targetFolderId, newFolderId);
+
+        // Get subfolders using tree (for drives) or cmd_get_files (for Saved Messages)
+        const children = await getSubfolderNodes(folder.id);
+        for (const child of children) {
+            const childFolder: TelegramFile = {
+                id: child.id,
+                name: child.name + '/',
+                type: 'folder',
+                size: 0,
+                sizeStr: '0 B',
+                current_id: child.id,
+            };
+            await moveFolderRecursively(childFolder, targetFolderId, newFolderId);
         }
-        
-        // After moving all contents, delete the source folder if it's a cross-drive move
+
         if (targetFolderId !== activeFolderId) {
             const folderMessageId = folder.current_id ?? folder.id;
-            console.log(`[moveFolderRecursively] Deleting source folder ${folder.name} (ID: ${folderMessageId})`);
             try {
                 await invoke('cmd_delete_file', {
                     messageId: folderMessageId,
@@ -457,7 +418,6 @@ export function useFileOperations(
                 });
             } catch (e) {
                 console.error(`[moveFolderRecursively] Failed to delete source folder:`, e);
-                // Don't throw - the move was successful, just cleanup failed
             }
         }
     };
@@ -484,10 +444,10 @@ export function useFileOperations(
             for (const file of filesToDownload) {
                 const filePath = `${dirPath}/${file.name}`;
                 try {
-                    await invoke('cmd_download_file', { 
-                        messageId: file.current_id ?? file.id, 
-                        savePath: filePath, 
-                        folderId: activeFolderId 
+                    await invoke('cmd_download_file', {
+                        messageId: file.current_id ?? file.id,
+                        savePath: filePath,
+                        folderId: activeFolderId
                     });
                     successCount++;
                 } catch (e) {
