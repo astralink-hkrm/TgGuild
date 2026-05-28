@@ -14,6 +14,7 @@ pub struct TeamInfo {
     pub is_supergroup: bool,
     pub top_members: Vec<TeamMember>,
     pub unread_count: i32,
+    pub photo_url: Option<String>,
 }
 
 #[derive(Clone, serde::Serialize)]
@@ -42,6 +43,7 @@ pub struct DirectChatInfo {
     pub last_name: Option<String>,
     pub username: Option<String>,
     pub phone: Option<String>,
+    pub photo_url: Option<String>,
     pub unread_count: i32,
     pub invite_eligible: bool,
     pub invite_restriction: Option<String>,
@@ -56,6 +58,7 @@ pub struct CurrentTelegramUser {
     pub first_name: String,
     pub last_name: Option<String>,
     pub username: Option<String>,
+    pub photo_url: Option<String>,
 }
 
 fn peer_to_input_peer(peer: &Peer) -> Result<tl::enums::InputPeer, String> {
@@ -121,6 +124,7 @@ pub struct ChatMessage {
     pub id: i32,
     pub sender_id: i64,
     pub sender_name: String,
+    pub sender_photo_url: Option<String>,
     pub text: String,
     pub date: String,
     pub has_media: bool,
@@ -130,6 +134,34 @@ pub struct ChatMessage {
     pub mime_type: String,
     pub outgoing: bool,
     pub pinned: bool,
+}
+
+fn user_has_photo(user: &tl::enums::User) -> bool {
+    let has_photo = match user {
+        tl::enums::User::User(u) => match &u.photo {
+            Some(tl::enums::UserProfilePhoto::Photo(_)) => true,
+            _ => false,
+        },
+        _ => false,
+    };
+    if let tl::enums::User::User(u) = user {
+        log::debug!("[AUTH] User {} (ID: {}) has photo: {}", u.first_name.clone().unwrap_or_default(), u.id, has_photo);
+    }
+    has_photo
+}
+
+fn chat_has_photo(chat: &tl::enums::Chat) -> bool {
+    match chat {
+        tl::enums::Chat::Chat(c) => match &c.photo {
+            tl::enums::ChatPhoto::Photo(_) => true,
+            _ => false,
+        },
+        tl::enums::Chat::Channel(c) => match &c.photo {
+            tl::enums::ChatPhoto::Photo(_) => true,
+            _ => false,
+        },
+        _ => false,
+    }
 }
 
 #[tauri::command]
@@ -148,6 +180,7 @@ pub async fn cmd_get_current_user(
         first_name: user.first_name().unwrap_or("You").to_string(),
         last_name: user.last_name().map(|s| s.to_string()),
         username: user.username().map(|s| s.to_string()),
+        photo_url: if user_has_photo(&user.raw) { Some("present".to_string()) } else { None },
     }))
 }
 
@@ -184,6 +217,7 @@ pub async fn cmd_get_teams(
                     is_supergroup: c.raw.megagroup,
                     top_members: Vec::new(),
                     unread_count: get_dialog_unread_count(&dialog.raw),
+                    photo_url: if chat_has_photo(&tl::enums::Chat::Channel(c.raw.clone())) { Some("present".to_string()) } else { None },
                 });
             },
             Peer::Group(g) => {
@@ -201,6 +235,7 @@ pub async fn cmd_get_teams(
                     is_supergroup: false,
                     top_members: Vec::new(),
                     unread_count: get_dialog_unread_count(&dialog.raw),
+                    photo_url: if chat_has_photo(&g.raw) { Some("present".to_string()) } else { None },
                 });
             },
             _ => {}
@@ -246,6 +281,7 @@ pub async fn cmd_get_direct_chats(
                 last_name: user.last_name().map(|s| s.to_string()),
                 username: user.username().map(|s| s.to_string()),
                 phone,
+                photo_url: if user_has_photo(&user.raw) { Some("present".to_string()) } else { None },
                 unread_count: get_dialog_unread_count(&dialog.raw),
                 invite_eligible: user.mutual_contact(),
                 invite_restriction: if user.mutual_contact() {
@@ -315,7 +351,7 @@ pub async fn cmd_get_team_members(
             is_admin,
             is_owner,
             role: role_name,
-            photo_url: None,
+            photo_url: if user_has_photo(&user.raw) { Some("present".to_string()) } else { None },
             access_hash: match &user.raw {
                 tl::enums::User::User(u) => u.access_hash,
                 _ => None,
@@ -361,6 +397,7 @@ pub async fn cmd_search_users(
             let last_name = u.last_name.clone();
             let username = u.username.clone();
             let phone = u.phone.clone();
+            let u_raw = tl::enums::User::User(u.clone());
             
             results.push(TeamMember {
                 user_id: u.id,
@@ -371,7 +408,7 @@ pub async fn cmd_search_users(
                 is_admin: false,
                 is_owner: false,
                 role: "member".to_string(),
-                photo_url: None,
+                photo_url: if user_has_photo(&u_raw) { Some("present".to_string()) } else { None },
                 invite_eligible: u.mutual_contact,
                 invite_restriction: if u.mutual_contact {
                     None
@@ -382,7 +419,7 @@ pub async fn cmd_search_users(
             });
             state.peer_cache.write().await.insert(
                 u.id,
-                Peer::User(grammers_client::types::User::from_raw(tl::enums::User::User(u.clone()))),
+                Peer::User(grammers_client::types::User::from_raw(u_raw)),
             );
         }
     }
@@ -451,6 +488,7 @@ pub async fn cmd_get_contacts(
                     let last_name = u.last_name.clone();
                     let username = u.username.clone();
                     let phone = u.phone.clone();
+                    let u_raw = tl::enums::User::User(u.clone());
                     
                     results.push(TeamMember {
                         user_id: u.id,
@@ -461,7 +499,7 @@ pub async fn cmd_get_contacts(
                         is_admin: false,
                         is_owner: false,
                         role: "member".to_string(),
-                        photo_url: None,
+                        photo_url: if user_has_photo(&u_raw) { Some("present".to_string()) } else { None },
                         invite_eligible: u.mutual_contact,
                         invite_restriction: if u.mutual_contact {
                             None
@@ -472,7 +510,7 @@ pub async fn cmd_get_contacts(
                     });
                     state.peer_cache.write().await.insert(
                         u.id,
-                        Peer::User(grammers_client::types::User::from_raw(tl::enums::User::User(u.clone()))),
+                        Peer::User(grammers_client::types::User::from_raw(u_raw)),
                     );
                 }
             }
@@ -740,7 +778,7 @@ pub async fn cmd_create_team(
 ) -> Result<TeamInfo, String> {
     let client_opt = state.client.lock().await.clone();
     if client_opt.is_none() {
-        return Ok(TeamInfo { id: 999, name, username: None, member_count: 0, is_channel: false, is_supergroup: true, top_members: Vec::new(), unread_count: 0 });
+        return Ok(TeamInfo { id: 999, name, username: None, member_count: 0, is_channel: false, is_supergroup: true, top_members: Vec::new(), unread_count: 0, photo_url: None });
     }
     let client = client_opt.unwrap();
     
@@ -779,6 +817,7 @@ pub async fn cmd_create_team(
         is_supergroup: true,
         top_members: Vec::new(),
         unread_count: 0,
+        photo_url: None,
     })
 }
 
@@ -907,16 +946,18 @@ pub async fn cmd_get_team_messages(
             break;
         }
 
-        let sender_name = match msg.sender() {
+        let (sender_name, sender_photo_url) = match msg.sender() {
             Some(Peer::User(u)) => {
                 let first = if let Some(f) = u.first_name() { f.to_string() } else { "Unknown".to_string() };
-                if let Some(l) = u.last_name() {
+                let full_name = if let Some(l) = u.last_name() {
                     format!("{} {}", first, l)
                 } else {
                     first
-                }
+                };
+                let photo = if user_has_photo(&u.raw) { Some("present".to_string()) } else { None };
+                (full_name, photo)
             },
-            _ => "Unknown".to_string(),
+            _ => ("Unknown".to_string(), None),
         };
         let sender_id = match msg.sender() {
             Some(Peer::User(u)) => u.raw.id() as i64,
@@ -968,6 +1009,7 @@ pub async fn cmd_get_team_messages(
             id: msg.id(),
             sender_id,
             sender_name,
+            sender_photo_url,
             text: display_text,
             date: date_str,
             has_media,

@@ -31,6 +31,7 @@ interface ContactInfo {
     last_name?: string | null;
     username?: string | null;
     phone?: string | null;
+    photo_url?: string | null;
     unread_count?: number;
 }
 
@@ -40,6 +41,7 @@ interface CurrentUser {
     last_name?: string | null;
     username?: string | null;
     phone?: string | null;
+    photo_url?: string | null;
 }
 
 interface SidebarProps {

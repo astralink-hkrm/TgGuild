@@ -53,7 +53,7 @@ export function Dashboard({ onLogout }: { onLogout: () => void }) {
     const [activeCompanyManagement, setActiveCompanyManagement] = useState(false);
     const [activeGroupId, setActiveGroupId] = useState<number | null>(null);
     const [activeDirectChat, setActiveDirectChat] = useState<any | null>(null);
-    const [groups, setGroups] = useState<{id: number, name: string, username: string | null, member_count: number}[]>([]);
+    const [groups, setGroups] = useState<{id: number, name: string, username: string | null, member_count: number, photo_url?: string | null}[]>([]);
     const [activeMembers, setActiveMembers] = useState<any[]>([]);
     const [showAddSubscriber, setShowAddSubscriber] = useState(false);
     const [currentUserId, setCurrentUserId] = useState<string | null>(null);
@@ -61,7 +61,7 @@ export function Dashboard({ onLogout }: { onLogout: () => void }) {
 
     const loadGroups = async () => {
         try {
-            const result = await invoke<{id: number, name: string, username: string | null, member_count: number}[]>('cmd_get_teams');
+            const result = await invoke<{id: number, name: string, username: string | null, member_count: number, photo_url?: string | null}[]>('cmd_get_teams');
             setGroups(result);
         } catch (e) {
             console.error('Failed to load groups:', e);
@@ -475,11 +475,12 @@ export function Dashboard({ onLogout }: { onLogout: () => void }) {
                             isDirect
                         />
                     </div>
-                ) : activeDirectChat ? (
+                    ) : activeDirectChat ? (
                     <div className="flex-1 flex flex-col min-h-0 relative">
                         <TeamChat
                             groupId={Number(activeDirectChat.user_id)}
                             groupName={`${activeDirectChat.first_name} ${activeDirectChat.last_name || ''}`.trim()}
+                            groupPhotoUrl={activeDirectChat.photo_url}
                             isDirect
                         />
                     </div>
@@ -500,6 +501,7 @@ export function Dashboard({ onLogout }: { onLogout: () => void }) {
                         <TeamChat 
                             groupId={activeGroupId} 
                             groupName={groups.find(g => g.id === activeGroupId)?.name || 'Group Chat'}
+                            groupPhotoUrl={groups.find(g => g.id === activeGroupId)?.photo_url}
                             memberCount={groups.find(g => g.id === activeGroupId)?.member_count || activeMembers.length}
                             canManageMembers={canManageActiveGroup}
                             mentionableMembers={activeMembers}

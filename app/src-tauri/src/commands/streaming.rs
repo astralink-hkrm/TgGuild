@@ -13,9 +13,12 @@ pub struct StreamInfo {
     pub base_url: String,
 }
 
+#[tauri::command]
+pub fn cmd_get_stream_token(config: State<'_, StreamConfig>) -> String {
+    config.token.clone()
+}
+
 /// Returns the streaming server's session token and base URL to the frontend.
-/// The frontend must use the returned base_url to construct stream URLs,
-/// never hardcoding the port.
 #[tauri::command]
 pub fn cmd_get_stream_info(config: State<'_, StreamConfig>) -> StreamInfo {
     StreamInfo {

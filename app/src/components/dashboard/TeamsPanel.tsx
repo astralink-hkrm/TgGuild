@@ -21,6 +21,7 @@ interface TeamInfo {
     member_count: number;
     is_channel: boolean;
     is_supergroup: boolean;
+    photo_url?: string | null;
 }
 
 interface TeamMember {
@@ -34,6 +35,7 @@ interface TeamMember {
     role: string;
     access_hash?: string | null;
     unread_count?: number;
+    photo_url?: string | null;
 }
 
 interface CurrentTelegramUser {
@@ -337,6 +339,7 @@ export function TeamsPanel({ onGroupCreated }: TeamsPanelProps) {
                         <TeamChat
                             groupId={selectedTeam ? selectedTeam.id : Number(selectedContact!.user_id)}
                             groupName={selectedTeam ? selectedTeam.name : `${selectedContact!.first_name} ${selectedContact!.last_name || ''}`.trim()}
+                            groupPhotoUrl={selectedTeam ? selectedTeam.photo_url : selectedContact!.photo_url}
                             memberCount={selectedTeam?.member_count || members.length}
                             canManageMembers={canManageMembers}
                             isDirect={selectedChat.type === 'direct'}

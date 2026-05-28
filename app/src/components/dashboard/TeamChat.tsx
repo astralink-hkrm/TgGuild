@@ -29,6 +29,7 @@ interface ChatMessage {
     id: number;
     sender_id: number;
     sender_name: string;
+    sender_photo_url?: string | null;
     text: string;
     date: string;
     has_media: boolean;
@@ -62,6 +63,7 @@ interface StreamInfo {
 interface TeamChatProps {
     groupId: number | null;
     groupName: string;
+    groupPhotoUrl?: string | null;
     memberCount?: number;
     canManageMembers?: boolean;
     isDirect?: boolean;
@@ -72,6 +74,7 @@ interface TeamChatProps {
 export function TeamChat({
     groupId,
     groupName,
+    groupPhotoUrl,
     memberCount,
     canManageMembers = false,
     isDirect = false,
@@ -414,7 +417,7 @@ export function TeamChat({
                 <div className="flex items-center gap-3 min-w-0">
                     <div className="w-10 h-10 rounded-full bg-[#242424] text-white flex items-center justify-center overflow-hidden">
                         <TelegramAvatar
-                            user={{ user_id: groupId ?? 'self', first_name: groupName }}
+                            user={{ user_id: groupId ?? 'self', first_name: groupName, photo_url: groupPhotoUrl }}
                             token={streamToken}
                             baseUrl={streamBaseUrl}
                             size="lg"
@@ -475,7 +478,7 @@ export function TeamChat({
                                     <div className={`flex gap-2 max-w-[78%] ${outgoing ? 'flex-row-reverse' : ''}`}>
                                         {!outgoing && !isDirect && (
                                             <TelegramAvatar
-                                                user={{ user_id: msg.sender_id, first_name: msg.sender_name }}
+                                                user={{ user_id: msg.sender_id, first_name: msg.sender_name, photo_url: msg.sender_photo_url }}
                                                 token={streamToken}
                                                 baseUrl={streamBaseUrl}
                                                 size="md"

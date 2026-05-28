@@ -5,6 +5,7 @@ export interface AvatarUser {
     first_name?: string | null;
     last_name?: string | null;
     username?: string | null;
+    photo_url?: string | null;
 }
 
 interface TelegramAvatarProps {
@@ -46,7 +47,9 @@ export function TelegramAvatar({ user, token, baseUrl = 'http://localhost:14201'
     const [imageLoaded, setImageLoaded] = useState(false);
     const [imageFailed, setImageFailed] = useState(false);
     const userId = String(user.user_id);
-    const avatarUrl = token && !imageFailed
+    
+    // Only attempt to load if we have a token AND the user actually has a photo
+    const avatarUrl = token && !imageFailed && user.photo_url
         ? `${baseUrl}/avatar/${userId}?token=${token}`
         : null;
 
