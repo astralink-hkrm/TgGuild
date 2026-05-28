@@ -108,6 +108,8 @@ pub fn run() {
             commands::cmd_logout,
             commands::cmd_scan_folders,
             commands::cmd_search_global,
+            commands::cmd_create_dir,
+            commands::cmd_file_exists,
             commands::cmd_check_connection,
             commands::cmd_is_network_available,
             commands::cmd_clean_cache,

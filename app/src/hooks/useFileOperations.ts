@@ -18,10 +18,34 @@ export function useFileOperations(
     activeVirtualFolderId: number | null,
     selectedIds: number[],
     setSelectedIds: (ids: number[]) => void,
-    displayedFiles: TelegramFile[]
+    displayedFiles: TelegramFile[],
+    currentFolderName: string
 ) {
     const queryClient = useQueryClient();
     const { confirm } = useConfirm();
+
+    const makePathUnique = async (path: string): Promise<string> => {
+        try {
+            const exists = await invoke<boolean>('cmd_file_exists', { path });
+            if (!exists) return path;
+
+            const extIndex = path.lastIndexOf('.');
+            const base = extIndex !== -1 ? path.substring(0, extIndex) : path;
+            const ext = extIndex !== -1 ? path.substring(extIndex) : '';
+
+            let counter = 1;
+            while (true) {
+                const newPath = `${base} (${counter})${ext}`;
+                const stillExists = await invoke<boolean>('cmd_file_exists', { path: newPath });
+                if (!stillExists) return newPath;
+                counter++;
+                if (counter > 100) return newPath; // Safety break
+            }
+        } catch (e) {
+            console.error('Error checking file existence:', e);
+            return path;
+        }
+    };
 
     const invalidateCurrent = () => {
         queryClient.invalidateQueries({ queryKey: ['files', activeFolderId, activeVirtualFolderId] });
@@ -116,6 +140,13 @@ export function useFileOperations(
             }));
             if (!dirPath) return;
 
+            // Create root hierarchy container to preserve structure
+            const sanitizedRootName = currentFolderName.replace(/[<>:"/\\|?*]/g, '_');
+            const rootDirPath = `${dirPath}/${sanitizedRootName}`;
+
+            // Ensure the root container directory exists
+            await invoke('cmd_create_dir', { path: rootDirPath });
+
             const itemsToDownload = displayedFiles.filter((f) => selectedIds.includes(f.current_id ?? f.id));
             const files = itemsToDownload.filter(f => f.type !== 'folder');
             const folders = itemsToDownload.filter(f => f.type === 'folder');
@@ -131,7 +162,8 @@ export function useFileOperations(
             toast.info(`Starting download of ${totalFiles} file(s)...`);
 
             for (const file of files) {
-                const filePath = `${dirPath}/${file.name}`;
+                let filePath = `${rootDirPath}/${file.name}`;
+                filePath = await makePathUnique(filePath);
                 const messageId = file.current_id ?? file.id;
                 try {
                     toast.info(`Downloading: ${file.name}`, { duration: 1000 });
@@ -146,7 +178,7 @@ export function useFileOperations(
             }
 
             for (const folder of folders) {
-                const folderPath = `${dirPath}/${folder.name.replace('/', '')}`;
+                const folderPath = `${rootDirPath}/${folder.name.replace('/', '')}`;
                 const count = await downloadFolderRecursively(folder, folderPath, activeFolderId);
                 downloadedCount += count;
             }
@@ -187,6 +219,9 @@ export function useFileOperations(
         let downloadedCount = 0;
 
         try {
+            // Ensure local directory exists immediately, even if folder is empty
+            await invoke('cmd_create_dir', { path: folderPath });
+
             const contents = await invoke<any[]>('cmd_get_files', {
                 folderId,
                 virtualFolderId: folder.id
@@ -195,7 +230,8 @@ export function useFileOperations(
             const files = contents.filter((f: any) => f.icon_type !== 'folder' && !f.name.endsWith('/'));
 
             for (const file of files) {
-                const filePath = `${folderPath}/${file.name}`;
+                let filePath = `${folderPath}/${file.name}`;
+                filePath = await makePathUnique(filePath);
                 try {
                     const displayPath = folderPath.split('/').slice(-2).join('/') + '/' + file.name;
                     toast.info(`Downloading: ${displayPath}`, { duration: 1000 });
