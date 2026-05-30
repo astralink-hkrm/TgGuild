@@ -5,6 +5,10 @@
   ],
   "permissions": [
     "core:default",
+    {
+      "identifier": "opener:allow-open-path",
+      "allow": [{ "path": "$TEMP/**" }]
+    },
     "shell:allow-open",
     "store:default",
     "dialog:default",

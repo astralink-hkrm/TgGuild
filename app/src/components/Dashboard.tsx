@@ -187,10 +187,19 @@ export function Dashboard({ onLogout }: { onLogout: () => void }) {
         enabled: !!store
     });
 
+    const currentFolderName = useMemo(() => {
+        if (activeVirtualFolderId === null) {
+            if (activeFolderId === null) return "Saved Messages";
+            const folder = folders.find(f => f.id === activeFolderId);
+            return folder ? folder.name : "Drive";
+        }
+        return virtualFolderStack[virtualFolderStack.length - 1]?.name || "Folder";
+    }, [activeVirtualFolderId, activeFolderId, folders, virtualFolderStack]);
+
     const {
         handleDelete, handleRename, handleBulkDelete, handleBulkDownload,
         handleBulkMove, handleGlobalSearch
-    } = useFileOperations(activeFolderId, activeVirtualFolderId, selectedIds, setSelectedIds, displayedFiles);
+    } = useFileOperations(activeFolderId, activeVirtualFolderId, selectedIds, setSelectedIds, displayedFiles, currentFolderName);
 
     const { uploadQueue, setUploadQueue, handleManualUpload, cancelAll: cancelUploads, cancelItem: cancelUploadItem, retryItem: retryUploadItem, isDragging } = useFileUpload(activeFolderId, store, activeVirtualFolderId);
     const { downloadQueue, queueDownload, clearFinished: clearDownloads, cancelAll: cancelDownloads, cancelItem: cancelDownloadItem, retryItem: retryDownloadItem, openWithSystemApp } = useFileDownload(store);
@@ -379,10 +388,10 @@ export function Dashboard({ onLogout }: { onLogout: () => void }) {
         }
     }
 
-    const currentFolderName = activeFolderId === null
+    const driveName = activeFolderId === null
         ? "Saved Messages"
         : folders.find(f => f.id === activeFolderId)?.name || "Folder";
-    const currentDrivePath = [currentFolderName, ...virtualFolderStack.map(folder => folder.name)].join(' / ');
+    const currentDrivePath = [driveName, ...virtualFolderStack.map(folder => folder.name)].join(' / ');
 
     const canManageActiveGroup = activeGroupId !== null && activeMembers.some(member => (
         String(member.user_id) === currentUserId && (member.is_admin || member.is_owner)

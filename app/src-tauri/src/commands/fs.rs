@@ -1416,6 +1416,16 @@ pub async fn cmd_share_files(
 }
 
 #[tauri::command]
+pub fn cmd_create_dir(path: String) -> Result<(), String> {
+    std::fs::create_dir_all(&path).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn cmd_file_exists(path: String) -> bool {
+    std::path::Path::new(&path).exists()
+}
+
+#[tauri::command]
 pub async fn cmd_get_files(
     folder_id: Option<i64>,
     virtual_folder_id: Option<i64>,
