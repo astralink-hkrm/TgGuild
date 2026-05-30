@@ -66,6 +66,34 @@ export function TeamVisibilityModal({
         onChange(next);
     };
 
+    const allSelected = useMemo(() => {
+        const noTeamsHidden = filteredTeams.every(team => !settings.hiddenTeamIds.includes(String(team.id)));
+        const noContactsHidden = filteredContacts.every(contact => !settings.hiddenContactIds.includes(String(contact.user_id)));
+        const noDrivesHidden = filteredDrives.every(drive => !settings.hiddenDriveIds.includes(String(drive.id)));
+        const totalFiltered = filteredTeams.length + filteredContacts.length + filteredDrives.length;
+        return totalFiltered > 0 && noTeamsHidden && noContactsHidden && noDrivesHidden;
+    }, [filteredTeams, filteredContacts, filteredDrives, settings]);
+
+    const toggleAll = () => {
+        if (allSelected) {
+            // Deselect visible
+            updateSettings({
+                ...settings,
+                hiddenTeamIds: [...new Set([...settings.hiddenTeamIds, ...filteredTeams.map(t => String(t.id))])],
+                hiddenContactIds: [...new Set([...settings.hiddenContactIds, ...filteredContacts.map(c => String(c.user_id))])],
+                hiddenDriveIds: [...new Set([...settings.hiddenDriveIds, ...filteredDrives.map(d => String(d.id))])],
+            });
+        } else {
+            // Select visible
+            updateSettings({
+                ...settings,
+                hiddenTeamIds: settings.hiddenTeamIds.filter(id => !filteredTeams.some(t => String(t.id) === id)),
+                hiddenContactIds: settings.hiddenContactIds.filter(id => !filteredContacts.some(c => String(c.user_id) === id)),
+                hiddenDriveIds: settings.hiddenDriveIds.filter(id => !filteredDrives.some(d => String(d.id) === id)),
+            });
+        }
+    };
+
     const toggleTeam = (id: number) => {
         const key = String(id);
         const hiddenTeamIds = settings.hiddenTeamIds.includes(key)
@@ -107,7 +135,7 @@ export function TeamVisibilityModal({
                 </div>
 
                 <div className="border-b border-telegram-border p-4">
-                    <div className="relative">
+                    <div className="relative mb-3">
                         <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-telegram-subtext" />
                         <input
                             value={query}
@@ -116,6 +144,16 @@ export function TeamVisibilityModal({
                             className="w-full rounded-xl border border-telegram-border bg-telegram-hover py-2 pl-9 pr-3 text-sm text-telegram-text outline-none focus:border-telegram-primary"
                         />
                     </div>
+                    <button
+                        onClick={toggleAll}
+                        className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left hover:bg-telegram-hover"
+                    >
+                        <Checkbox checked={allSelected} />
+                        <div className="min-w-0 flex-1">
+                            <p className="text-sm font-medium text-telegram-text">Select All</p>
+                            <p className="text-xs text-telegram-subtext">Show or hide all items</p>
+                        </div>
+                    </button>
                 </div>
 
                 <div className="max-h-[480px] overflow-y-auto p-3 custom-scrollbar">
