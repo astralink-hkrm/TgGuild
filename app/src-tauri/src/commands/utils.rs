@@ -62,6 +62,46 @@ pub async fn resolve_peer(
     }
 }
 
+pub fn resolve_input_peer(peer: &Peer) -> Result<grammers_tl_types::enums::InputPeer, String> {
+    use grammers_tl_types::enums::InputPeer;
+    use grammers_tl_types::types::{InputPeerChannel, InputPeerChat, InputPeerUser};
+    use grammers_tl_types::enums;
+
+    match peer {
+        Peer::Channel(c) => {
+            Ok(InputPeer::Channel(InputPeerChannel {
+                channel_id: c.raw.id,
+                access_hash: c.raw.access_hash.unwrap_or(0),
+            }))
+        }
+        Peer::User(u) => {
+            let access_hash = match &u.raw {
+                enums::User::User(user) => user.access_hash.unwrap_or(0),
+                _ => 0,
+            };
+            Ok(InputPeer::User(InputPeerUser {
+                user_id: u.raw.id(),
+                access_hash,
+            }))
+        }
+        Peer::Group(g) => {
+            // Groups in grammers can be either Chat or Channel (supergroup)
+            match &g.raw {
+                enums::Chat::Chat(c) => Ok(InputPeer::Chat(InputPeerChat {
+                    chat_id: c.id,
+                })),
+                enums::Chat::Channel(c) => {
+                    Ok(InputPeer::Channel(InputPeerChannel {
+                        channel_id: c.id,
+                        access_hash: c.access_hash.unwrap_or(0),
+                    }))
+                }
+                _ => Err("Unsupported group type".to_string()),
+            }
+        }
+    }
+}
+
 /// Clear the peer cache (called on logout)
 pub async fn clear_peer_cache(peer_cache: &Arc<RwLock<HashMap<i64, Peer>>>) {
     peer_cache.write().await.clear();

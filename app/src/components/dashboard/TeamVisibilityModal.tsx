@@ -24,6 +24,7 @@ interface ContactItem {
 interface TeamVisibilityModalProps {
     teams: TeamItem[];
     contacts: ContactItem[];
+    drives: TeamItem[];
     settings: TeamVisibilitySettings;
     streamToken?: string;
     onClose: () => void;
@@ -33,6 +34,7 @@ interface TeamVisibilityModalProps {
 export function TeamVisibilityModal({
     teams,
     contacts,
+    drives,
     settings,
     streamToken,
     onClose,
@@ -53,6 +55,11 @@ export function TeamVisibilityModal({
                 .includes(needle)
         ));
     }, [contacts, query]);
+
+    const filteredDrives = useMemo(() => {
+        const needle = query.toLowerCase();
+        return drives.filter(drive => `${drive.name} ${drive.username || ''}`.toLowerCase().includes(needle));
+    }, [drives, query]);
 
     const updateSettings = (next: TeamVisibilitySettings) => {
         saveTeamVisibility(next);
@@ -75,6 +82,14 @@ export function TeamVisibilityModal({
         updateSettings({ ...settings, hiddenContactIds });
     };
 
+    const toggleDrive = (id: number) => {
+        const key = String(id);
+        const hiddenDriveIds = settings.hiddenDriveIds.includes(key)
+            ? settings.hiddenDriveIds.filter(item => item !== key)
+            : [...settings.hiddenDriveIds, key];
+        updateSettings({ ...settings, hiddenDriveIds });
+    };
+
     return (
         <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/50 p-4" onClick={onClose}>
             <div
@@ -83,8 +98,8 @@ export function TeamVisibilityModal({
             >
                 <div className="flex items-center justify-between border-b border-telegram-border p-4">
                     <div>
-                        <h3 className="text-base font-semibold text-telegram-text">Team Visibility</h3>
-                        <p className="text-xs text-telegram-subtext">Choose which groups and people appear in Teams.</p>
+                        <h3 className="text-base font-semibold text-telegram-text">Visibility Settings</h3>
+                        <p className="text-xs text-telegram-subtext">Choose which items appear in the sidebar.</p>
                     </div>
                     <button onClick={onClose} className="rounded-full p-2 text-telegram-subtext hover:bg-telegram-hover hover:text-telegram-text">
                         <X className="h-5 w-5" />
@@ -97,13 +112,37 @@ export function TeamVisibilityModal({
                         <input
                             value={query}
                             onChange={(event) => setQuery(event.target.value)}
-                            placeholder="Search groups or people"
+                            placeholder="Search groups, people or drives"
                             className="w-full rounded-xl border border-telegram-border bg-telegram-hover py-2 pl-9 pr-3 text-sm text-telegram-text outline-none focus:border-telegram-primary"
                         />
                     </div>
                 </div>
 
                 <div className="max-h-[480px] overflow-y-auto p-3 custom-scrollbar">
+                    {filteredDrives.length > 0 && (
+                        <>
+                            <VisibilitySection label="Drives" count={filteredDrives.length} />
+                            {filteredDrives.map(drive => {
+                                const checked = !settings.hiddenDriveIds.includes(String(drive.id));
+                                return (
+                                    <button
+                                        key={drive.id}
+                                        onClick={() => toggleDrive(drive.id)}
+                                        className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left hover:bg-telegram-hover"
+                                    >
+                                        <Checkbox checked={checked} />
+                                        <div className="min-w-0 flex-1">
+                                            <p className="truncate text-sm font-medium text-telegram-text">{drive.name}</p>
+                                            <p className="truncate text-xs text-telegram-subtext">
+                                                {drive.member_count} members{drive.username ? ` • @${drive.username}` : ''}
+                                            </p>
+                                        </div>
+                                    </button>
+                                );
+                            })}
+                        </>
+                    )}
+
                     <VisibilitySection label="Groups" count={filteredTeams.length} />
                     {filteredTeams.map(team => {
                         const checked = !settings.hiddenTeamIds.includes(String(team.id));

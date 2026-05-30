@@ -4,11 +4,13 @@ export const TEAM_VISIBILITY_CHANGED_EVENT = 'tgguild:teamVisibilityChanged';
 export interface TeamVisibilitySettings {
     hiddenTeamIds: string[];
     hiddenContactIds: string[];
+    hiddenDriveIds: string[];
 }
 
 export const defaultTeamVisibility: TeamVisibilitySettings = {
     hiddenTeamIds: [],
     hiddenContactIds: [],
+    hiddenDriveIds: [],
 };
 
 export function readTeamVisibility(): TeamVisibilitySettings {
@@ -22,6 +24,7 @@ export function readTeamVisibility(): TeamVisibilitySettings {
         return {
             hiddenTeamIds: Array.isArray(parsed.hiddenTeamIds) ? parsed.hiddenTeamIds.map(String) : [],
             hiddenContactIds: Array.isArray(parsed.hiddenContactIds) ? parsed.hiddenContactIds.map(String) : [],
+            hiddenDriveIds: Array.isArray(parsed.hiddenDriveIds) ? parsed.hiddenDriveIds.map(String) : [],
         };
     } catch {
         return defaultTeamVisibility;
@@ -39,4 +42,8 @@ export function isTeamVisible(id: string | number, settings: TeamVisibilitySetti
 
 export function isContactVisible(id: string | number, settings: TeamVisibilitySettings) {
     return !settings.hiddenContactIds.includes(String(id));
+}
+
+export function isDriveVisible(id: string | number, settings: TeamVisibilitySettings) {
+    return !settings.hiddenDriveIds.includes(String(id));
 }

@@ -1,5 +1,5 @@
 use crate::bandwidth::BandwidthManager;
-use crate::commands::utils::{map_error, resolve_peer};
+use crate::commands::utils::{map_error, resolve_input_peer, resolve_peer};
 use crate::models::{FileMetadata, FolderMetadata, FolderTreeNode};
 use crate::TelegramState;
 use grammers_client::types::{Media, Peer};
@@ -7,6 +7,16 @@ use grammers_client::InputMessage;
 use grammers_tl_types as tl;
 use std::collections::HashSet;
 use tauri::{Emitter, State};
+
+#[derive(Clone, serde::Serialize)]
+struct FolderLoadingProgress {
+    folder_id: Option<i64>,
+    virtual_folder_id: Option<i64>,
+    percent: u8,
+    processed: usize,
+    total: usize,
+    current_item: String,
+}
 
 const VIRTUAL_FOLDER_PREFIX: &str = "TGGuild_FOLDER_V1:";
 const VIRTUAL_FILE_PREFIX: &str = "TGGuild_FILE_V1:";
@@ -1429,6 +1439,7 @@ pub fn cmd_file_exists(path: String) -> bool {
 pub async fn cmd_get_files(
     folder_id: Option<i64>,
     virtual_folder_id: Option<i64>,
+    app_handle: tauri::AppHandle,
     state: State<'_, TelegramState>,
 ) -> Result<Vec<FileMetadata>, String> {
     let client_opt = { state.client.lock().await.clone() };
@@ -1441,9 +1452,55 @@ pub async fn cmd_get_files(
 
     let peer = resolve_peer(&client, folder_id, &state.peer_cache).await?;
 
+    // 1. Get total message count for progress reporting
+    let total_count = match client
+        .invoke(&tl::functions::messages::GetHistory {
+            peer: resolve_input_peer(&peer)?,
+            offset_id: 0,
+            offset_date: 0,
+            add_offset: 0,
+            limit: 1,
+            max_id: 0,
+            min_id: 0,
+            hash: 0,
+        })
+        .await
+    {
+        Ok(tl::enums::messages::Messages::Messages(m)) => m.messages.len(),
+        Ok(tl::enums::messages::Messages::Slice(s)) => s.count as usize,
+        Ok(tl::enums::messages::Messages::ChannelMessages(c)) => c.count as usize,
+        _ => 0,
+    };
+
+    let mut processed = 0;
+    let mut last_emit = std::time::Instant::now();
+
     let mut msgs = client.iter_messages(&peer);
     while let Some(msg) = msgs.next().await.map_err(|e| e.to_string())? {
+        processed += 1;
         let text = msg.text();
+
+        // Periodically emit progress
+        if last_emit.elapsed().as_millis() > 200 || processed == total_count {
+            let percent = if total_count > 0 {
+                ((processed as f64 / total_count as f64) * 100.0).min(100.0) as u8
+            } else {
+                0
+            };
+
+            let _ = app_handle.emit(
+                "folder-loading-progress",
+                FolderLoadingProgress {
+                    folder_id,
+                    virtual_folder_id,
+                    percent,
+                    processed,
+                    total: total_count,
+                    current_item: text.chars().take(30).collect::<String>(),
+                },
+            );
+            last_emit = std::time::Instant::now();
+        }
 
         // 1. Check for Virtual Folder
         // Drives: folders come from the pinned tree, skip all folder metadata messages

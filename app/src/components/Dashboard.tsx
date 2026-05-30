@@ -2,12 +2,13 @@ import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { AnimatePresence } from 'framer-motion';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { toast } from 'sonner';
 
 import { TelegramFile, BandwidthStats, FolderTreeNode } from '../types';
 import { formatBytes } from '../utils';
 
-import { Plus } from 'lucide-react';
+import { Plus, RefreshCw } from 'lucide-react';
 
 // Components
 import { Sidebar } from './dashboard/Sidebar';
@@ -43,6 +44,33 @@ export function Dashboard({ onLogout }: { onLogout: () => void }) {
     const [selectedIds, setSelectedIds] = useState<number[]>([]);
     const [activeVirtualFolderId, setActiveVirtualFolderId] = useState<number | null>(null);
     const [virtualFolderStack, setVirtualFolderStack] = useState<TelegramFile[]>([]);
+    const [loadingProgress, setLoadingProgress] = useState<{ percent: number, current_item: string } | null>(null);
+
+    // Reset progress when folder changes
+    useEffect(() => {
+        setLoadingProgress(null);
+    }, [activeFolderId, activeVirtualFolderId]);
+
+    useEffect(() => {
+        const unlisten = listen<{
+            folder_id: number | null;
+            virtual_folder_id: number | null;
+            percent: number;
+            processed: number;
+            total: number;
+            current_item: string;
+        }>('folder-loading-progress', (event) => {
+            const { folder_id, virtual_folder_id, percent, current_item } = event.payload;
+            if (folder_id === activeFolderId && virtual_folder_id === activeVirtualFolderId) {
+                setLoadingProgress({ percent, current_item });
+            }
+        });
+
+        return () => {
+            unlisten.then(f => f());
+        };
+    }, [activeFolderId, activeVirtualFolderId]);
+
     const [showMoveModal, setShowMoveModal] = useState(false);
     const [showShareModal, setShowShareModal] = useState(false);
     const [showCreateFolderModal, setShowCreateFolderModal] = useState(false);
@@ -554,6 +582,30 @@ export function Dashboard({ onLogout }: { onLogout: () => void }) {
                                 </span>
                             ))}
                         </div>
+
+                        {isLoading && loadingProgress && (
+                            <div className="mx-6 mt-4 p-4 rounded-xl border border-telegram-border bg-telegram-surface shadow-sm">
+                                <div className="flex items-center justify-between mb-2">
+                                    <div className="flex items-center gap-2">
+                                        <RefreshCw className="w-4 h-4 text-telegram-primary animate-spin" />
+                                        <span className="text-sm font-medium text-telegram-text">Loading Drive...</span>
+                                    </div>
+                                    <span className="text-sm font-bold text-telegram-primary">{loadingProgress.percent}%</span>
+                                </div>
+                                <div className="w-full h-1.5 bg-telegram-hover rounded-full overflow-hidden">
+                                    <div 
+                                        className="h-full bg-telegram-primary transition-all duration-300 ease-out"
+                                        style={{ width: `${loadingProgress.percent}%` }}
+                                    />
+                                </div>
+                                {loadingProgress.current_item && (
+                                    <p className="mt-2 text-[10px] text-telegram-subtext truncate">
+                                        Processing: {loadingProgress.current_item}
+                                    </p>
+                                )}
+                            </div>
+                        )}
+
                         <FileExplorer
                             files={displayedFiles}
                             loading={isLoading || isSearching}

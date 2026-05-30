@@ -23,8 +23,12 @@ export function useTelegramConnection(onLogoutParent: () => void) {
     const mergeFolderLists = (baseFolders: TelegramFolder[], scannedFolders: TelegramFolder[]) => {
         const byId = new Map<number, TelegramFolder>();
         baseFolders.forEach(folder => byId.set(folder.id, folder));
-        scannedFolders.forEach(folder => byId.set(folder.id, { ...byId.get(folder.id), ...folder }));
-        return Array.from(byId.values()).sort((a, b) => a.name.localeCompare(b.name));
+        
+        // Only return folders that are in scannedFolders (source of truth)
+        return scannedFolders.map(folder => ({
+            ...byId.get(folder.id),
+            ...folder
+        })).sort((a, b) => a.name.localeCompare(b.name));
     };
 
     const refreshFoldersFromTelegram = async (

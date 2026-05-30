@@ -10,6 +10,7 @@ import { TeamVisibilityModal } from './TeamVisibilityModal';
 import {
     isContactVisible,
     isTeamVisible,
+    isDriveVisible,
     readTeamVisibility,
     TEAM_VISIBILITY_CHANGED_EVENT,
     TeamVisibilitySettings,
@@ -253,16 +254,25 @@ export function Sidebar({
                 </div>
 
                 <div>
-                    <button
-                        onClick={() => setDriveExpanded(!driveExpanded)}
-                        className="w-full px-3 mb-2 flex items-center justify-between group"
-                    >
-                        <div className="flex items-center gap-2 text-[10px] font-bold text-telegram-subtext uppercase tracking-[0.1em] group-hover:text-telegram-text transition-colors">
-                            <HardDrive className="w-3 h-3" />
-                            Drive
-                        </div>
-                        {driveExpanded ? <ChevronDown className="w-3 h-3 text-telegram-subtext" /> : <ChevronRight className="w-3 h-3 text-telegram-subtext" />}
-                    </button>
+                    <div className="w-full px-3 mb-2 flex items-center justify-between group">
+                        <button
+                            onClick={() => setDriveExpanded(!driveExpanded)}
+                            className="min-w-0 flex flex-1 items-center justify-between"
+                        >
+                            <div className="flex items-center gap-2 text-[10px] font-bold text-telegram-subtext uppercase tracking-[0.1em] group-hover:text-telegram-text transition-colors">
+                                <HardDrive className="w-3 h-3" />
+                                Drive
+                            </div>
+                            {driveExpanded ? <ChevronDown className="w-3 h-3 text-telegram-subtext" /> : <ChevronRight className="w-3 h-3 text-telegram-subtext" />}
+                        </button>
+                        <button
+                            onClick={() => setShowVisibilitySettings(true)}
+                            className="ml-2 rounded-md p-1 text-telegram-subtext hover:bg-telegram-hover hover:text-telegram-text"
+                            title="Choose visible drives"
+                        >
+                            <Settings className="w-3.5 h-3.5" />
+                        </button>
+                    </div>
 
                     <AnimatePresence initial={false}>
                         {driveExpanded && (
@@ -286,7 +296,7 @@ export function Sidebar({
                                     onDrop={(e: React.DragEvent) => onDrop(e, null)}
                                     folderId={null}
                                 />
-                                {folders.map(folder => (
+                                {folders.filter(f => isDriveVisible(f.id, teamVisibility)).map(folder => (
                                     <SidebarItem
                                         key={folder.id}
                                         icon={Folder}
@@ -503,6 +513,7 @@ export function Sidebar({
                 <TeamVisibilityModal
                     teams={groups}
                     contacts={contacts}
+                    drives={folders.map(f => ({ id: f.id, name: f.name, username: null, member_count: f.member_count }))}
                     settings={teamVisibility}
                     streamToken={streamToken}
                     onClose={() => setShowVisibilitySettings(false)}
