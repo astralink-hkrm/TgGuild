@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Building2, HardDrive, Folder, Plus, RefreshCw, LogOut, Users, LayoutGrid, ChevronDown, ChevronRight, Settings, MessageSquare } from 'lucide-react';
+import { Building2, HardDrive, Folder, Plus, RefreshCw, LogOut, Users, LayoutGrid, ChevronDown, ChevronRight, Settings } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { invoke } from '@tauri-apps/api/core';
 import { SidebarItem } from './SidebarItem';
@@ -14,6 +14,7 @@ import {
     TEAM_VISIBILITY_CHANGED_EVENT,
     TeamVisibilitySettings,
 } from './teamVisibility';
+import { readTelegramDirectoryCache, saveTelegramDirectoryCache } from './telegramCache';
 import { TelegramFolder, BandwidthStats } from '../../types';
 
 interface GroupInfo {
@@ -21,8 +22,9 @@ interface GroupInfo {
     name: string;
     username: string | null;
     member_count: number;
-    top_members?: any[];
+    top_members?: { user_id: string; first_name: string; last_name?: string | null; photo_url?: string | null }[];
     unread_count?: number;
+    photo_url?: string | null;
 }
 
 interface ContactInfo {
@@ -80,12 +82,16 @@ export function Sidebar({
     const [streamToken, setStreamToken] = useState('');
     const [teamVisibility, setTeamVisibility] = useState<TeamVisibilitySettings>(() => readTeamVisibility());
     const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
+    const [teamsBeforeDate, setTeamsBeforeDate] = useState<number | null>(null);
+    const [contactsBeforeDate, setContactsBeforeDate] = useState<number | null>(null);
+    const [teamsHasMore, setTeamsHasMore] = useState(false);
+    const [contactsHasMore, setContactsHasMore] = useState(false);
+    const [teamsLoadingMore, setTeamsLoadingMore] = useState(false);
+    const [contactsLoadingMore, setContactsLoadingMore] = useState(false);
 
     useEffect(() => {
-        loadGroups();
-        loadDirectChats();
+        loadInitialDirectory();
         invoke<string>('cmd_get_stream_token').then(setStreamToken).catch(console.error);
-        invoke<CurrentUser | null>('cmd_get_current_user').then(setCurrentUser).catch(console.error);
     }, []);
 
     useEffect(() => {
@@ -98,21 +104,76 @@ export function Sidebar({
         };
     }, []);
 
+    const loadInitialDirectory = async () => {
+        try {
+            const user = await invoke<CurrentUser | null>('cmd_get_current_user');
+            setCurrentUser(user);
+
+            const cached = readTelegramDirectoryCache<GroupInfo, ContactInfo>(user?.user_id || null);
+            if (cached) {
+                setGroups(cached.teams);
+                setContacts(cached.contacts);
+                setTeamsBeforeDate(null);
+                setContactsBeforeDate(null);
+                setTeamsHasMore(false);
+                setContactsHasMore(false);
+            }
+
+            const [groupResp, contactResp] = await Promise.all([
+                invoke<{ teams: GroupInfo[]; next_before_date: number | null; has_more: boolean }>('cmd_get_teams'),
+                invoke<{ chats: ContactInfo[]; next_before_date: number | null; has_more: boolean }>('cmd_get_direct_chats'),
+            ]);
+            setGroups(groupResp.teams);
+            setContacts(contactResp.chats);
+            setTeamsBeforeDate(groupResp.next_before_date);
+            setContactsBeforeDate(contactResp.next_before_date);
+            setTeamsHasMore(groupResp.has_more);
+            setContactsHasMore(contactResp.has_more);
+            saveTelegramDirectoryCache(user?.user_id || null, groupResp.teams, contactResp.chats);
+        } catch (e) {
+            console.error('Failed to load Telegram directory:', e);
+        }
+    };
+
     const loadGroups = async () => {
         try {
-            const result = await invoke<GroupInfo[]>('cmd_get_teams');
-            setGroups(result);
+            const resp = await invoke<{ teams: GroupInfo[]; next_before_date: number | null; has_more: boolean }>('cmd_get_teams');
+            setGroups(resp.teams);
+            setTeamsBeforeDate(resp.next_before_date);
+            setTeamsHasMore(resp.has_more);
+            saveTelegramDirectoryCache(currentUser?.user_id || null, resp.teams, contacts);
         } catch (e) {
             console.error('Failed to load groups:', e);
         }
     };
 
-    const loadDirectChats = async () => {
+    const loadMoreGroups = async () => {
+        if (!teamsHasMore || teamsLoadingMore) return;
         try {
-            const result = await invoke<ContactInfo[]>('cmd_get_direct_chats');
-            setContacts(result);
+            setTeamsLoadingMore(true);
+            const resp = await invoke<{ teams: GroupInfo[]; next_before_date: number | null; has_more: boolean }>('cmd_get_teams', { beforeDate: teamsBeforeDate });
+            setGroups(prev => [...prev, ...resp.teams]);
+            setTeamsBeforeDate(resp.next_before_date);
+            setTeamsHasMore(resp.has_more);
         } catch (e) {
-            console.error('Failed to load direct chats:', e);
+            console.error('Failed to load more groups:', e);
+        } finally {
+            setTeamsLoadingMore(false);
+        }
+    };
+
+    const loadMoreDirectChats = async () => {
+        if (!contactsHasMore || contactsLoadingMore) return;
+        try {
+            setContactsLoadingMore(true);
+            const resp = await invoke<{ chats: ContactInfo[]; next_before_date: number | null; has_more: boolean }>('cmd_get_direct_chats', { beforeDate: contactsBeforeDate });
+            setContacts(prev => [...prev, ...resp.chats]);
+            setContactsBeforeDate(resp.next_before_date);
+            setContactsHasMore(resp.has_more);
+        } catch (e) {
+            console.error('Failed to load more direct chats:', e);
+        } finally {
+            setContactsLoadingMore(false);
         }
     };
 
@@ -136,6 +197,16 @@ export function Sidebar({
         } catch (e) {
             console.error('Failed to create group:', e);
         }
+    };
+
+    const handleLoadMoreTeams = async () => {
+        if (!teamsHasMore || teamsLoadingMore) return;
+        await loadMoreGroups();
+    };
+
+    const handleLoadMoreDirect = async () => {
+        if (!contactsHasMore || contactsLoadingMore) return;
+        await loadMoreDirectChats();
     };
 
     const visibleGroups = groups.filter(group => isTeamVisible(group.id, teamVisibility));
@@ -295,7 +366,11 @@ export function Sidebar({
                                 transition={{ duration: 0.2 }}
                                 className="overflow-hidden space-y-1"
                             >
-                                {visibleGroups.map(group => (
+                                {visibleGroups.map(group => {
+                                    const sortedMembers = group.top_members
+                                        ? [...group.top_members].sort((a, b) => a.first_name.localeCompare(b.first_name))
+                                        : [];
+                                    return (
                                     <button
                                         key={group.id}
                                         onClick={() => {
@@ -310,7 +385,11 @@ export function Sidebar({
                                                 : 'text-telegram-text hover:bg-telegram-hover'
                                         }`}
                                     >
-                                        <MessageSquare className="w-4 h-4" />
+                                        <TelegramAvatar
+                                            user={{ user_id: group.id, first_name: group.name, photo_url: group.photo_url }}
+                                            token={streamToken}
+                                            size="sm"
+                                        />
                                         <div className="flex-1 text-left min-w-0">
                                             <p className="truncate">{group.name}</p>
                                         </div>
@@ -318,13 +397,23 @@ export function Sidebar({
                                             {Boolean(group.unread_count) && (
                                                 <span className="h-2 w-2 rounded-full bg-telegram-primary" title={`${group.unread_count} unread`} />
                                             )}
-                                            {group.top_members && group.top_members.length > 0 && (
-                                                <MemberStack members={group.top_members} size="sm" maxDisplay={2} />
+                                            {sortedMembers.length > 0 && (
+                                                <MemberStack members={sortedMembers} size="sm" maxDisplay={3} />
                                             )}
                                         </div>
                                     </button>
-                                ))}
+                                    );
+                                })}
 
+                                {teamsHasMore && (
+                                    <button
+                                        onClick={handleLoadMoreTeams}
+                                        disabled={teamsLoadingMore}
+                                        className="w-full flex items-center justify-center gap-2 rounded-lg px-3 py-2 text-xs font-medium text-telegram-primary hover:bg-telegram-primary/10 transition-colors disabled:opacity-50"
+                                    >
+                                        {teamsLoadingMore ? 'Loading...' : 'Load More Teams'}
+                                    </button>
+                                )}
                                 <div className="flex gap-2 pt-2">
                                     <button
                                         onClick={handleCreateGroup}
@@ -343,7 +432,7 @@ export function Sidebar({
                                         <span>One on One</span>
                                         {directExpanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
                                     </button>
-                                    {directExpanded && visibleContacts.slice(0, 20).map(contact => (
+                                    {directExpanded && visibleContacts.map(contact => (
                                         <button
                                             key={contact.user_id}
                                             onClick={() => {
@@ -367,6 +456,15 @@ export function Sidebar({
                                             )}
                                         </button>
                                     ))}
+                                    {contactsHasMore && (
+                                        <button
+                                            onClick={handleLoadMoreDirect}
+                                            disabled={contactsLoadingMore}
+                                            className="w-full flex items-center justify-center gap-2 rounded-lg px-3 py-2 text-xs font-medium text-telegram-primary hover:bg-telegram-primary/10 transition-colors disabled:opacity-50"
+                                        >
+                                            {contactsLoadingMore ? 'Loading...' : 'Load More Contacts'}
+                                        </button>
+                                    )}
                                 </div>
                             </motion.div>
                         )}

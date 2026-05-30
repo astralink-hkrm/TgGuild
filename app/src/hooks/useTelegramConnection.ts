@@ -20,6 +20,37 @@ export function useTelegramConnection(onLogoutParent: () => void) {
 
     const networkIsOnline = useNetworkStatus();
 
+    const mergeFolderLists = (baseFolders: TelegramFolder[], scannedFolders: TelegramFolder[]) => {
+        const byId = new Map<number, TelegramFolder>();
+        baseFolders.forEach(folder => byId.set(folder.id, folder));
+        scannedFolders.forEach(folder => byId.set(folder.id, { ...byId.get(folder.id), ...folder }));
+        return Array.from(byId.values()).sort((a, b) => a.name.localeCompare(b.name));
+    };
+
+    const refreshFoldersFromTelegram = async (
+        targetStore: Store,
+        baseFolders: TelegramFolder[],
+        showToast: boolean,
+    ) => {
+        const foundFolders = await invoke<TelegramFolder[]>('cmd_scan_folders');
+        const knownIds = new Set(baseFolders.map(folder => folder.id));
+        const added = foundFolders.filter(folder => !knownIds.has(folder.id)).length;
+        const merged = mergeFolderLists(baseFolders, foundFolders);
+
+        setFolders(merged);
+        await targetStore.set('folders', merged);
+        await targetStore.save();
+
+        if (showToast) {
+            if (added > 0) {
+                toast.success(`Scan complete. Found ${added} new drive${added === 1 ? '' : 's'}.`);
+            } else {
+                toast.info("Scan complete. No new drives found.");
+            }
+        }
+
+        return merged;
+    };
 
     useEffect(() => {
         const initStore = async () => {
@@ -32,6 +63,7 @@ export function useTelegramConnection(onLogoutParent: () => void) {
                 setStore(_store);
 
                 const savedFolders = await _store.get<TelegramFolder[]>('folders');
+                const initialFolders = savedFolders || [];
                 if (savedFolders) setFolders(savedFolders);
 
 
@@ -77,7 +109,12 @@ export function useTelegramConnection(onLogoutParent: () => void) {
                     }
                 } else {
                     onLogoutParent();
+                    return;
                 }
+
+                await refreshFoldersFromTelegram(_store, initialFolders, false).catch((error) => {
+                    console.error('Initial drive scan failed:', error);
+                });
 
             } catch {
                 // store not available
@@ -138,23 +175,7 @@ export function useTelegramConnection(onLogoutParent: () => void) {
         if (!store) return;
         setIsSyncing(true);
         try {
-            const foundFolders = await invoke<TelegramFolder[]>('cmd_scan_folders');
-            const merged = [...folders];
-            let added = 0;
-            for (const f of foundFolders) {
-                if (!merged.find(existing => existing.id === f.id)) {
-                    merged.push(f);
-                    added++;
-                }
-            }
-            if (added > 0) {
-                setFolders(merged);
-                await store.set('folders', merged);
-                await store.save();
-                toast.success(`Scan complete. Found ${added} new folders.`);
-            } else {
-                toast.info("Scan complete. No new folders found.");
-            }
+            await refreshFoldersFromTelegram(store, folders, true);
         } catch {
             toast.error("Sync failed");
         } finally {

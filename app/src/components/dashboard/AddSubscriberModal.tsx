@@ -65,11 +65,11 @@ export function AddSubscriberModal({ teamId, canManageMembers = true, onClose, o
 
     const loadContacts = async () => {
         try {
-            const [directChats, telegramContacts] = await Promise.all([
-                invoke<TeamMember[]>('cmd_get_direct_chats'),
+            const [directResp, telegramContacts] = await Promise.all([
+                invoke<{ chats: TeamMember[] }>('cmd_get_direct_chats'),
                 invoke<TeamMember[]>('cmd_get_contacts').catch(() => [] as TeamMember[]),
             ]);
-            setContacts(mergePeople(directChats, telegramContacts));
+            setContacts(mergePeople(directResp.chats, telegramContacts));
         } catch (e) {
             console.error('Failed to load contacts:', e);
         }

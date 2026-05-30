@@ -24,6 +24,7 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { TelegramAvatar } from './TelegramAvatar';
+import { readTelegramMessageCache, saveTelegramMessageCache } from './telegramCache';
 
 interface ChatMessage {
     id: number;
@@ -40,6 +41,12 @@ interface ChatMessage {
     outgoing?: boolean;
     pinned?: boolean;
     pending?: boolean;
+}
+
+interface MessagesResponse {
+    messages: ChatMessage[];
+    next_before_message_id: number | null;
+    has_more: boolean;
 }
 
 interface AttachmentDraft {
@@ -59,6 +66,9 @@ interface StreamInfo {
     token: string;
     base_url: string;
 }
+
+const MESSAGES_PAGE_SIZE = 50;
+const SCROLLBACK_THRESHOLD = 120;
 
 interface TeamChatProps {
     groupId: number | null;
@@ -83,6 +93,9 @@ export function TeamChat({
 }: TeamChatProps) {
     const [messages, setMessages] = useState<ChatMessage[]>([]);
     const [loading, setLoading] = useState(true);
+    const [loadingOlder, setLoadingOlder] = useState(false);
+    const [hasOlderMessages, setHasOlderMessages] = useState(false);
+    const [beforeMessageId, setBeforeMessageId] = useState<number | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [newMessage, setNewMessage] = useState('');
     const [sending, setSending] = useState(false);
@@ -100,11 +113,28 @@ export function TeamChat({
     const recorderRef = useRef<MediaRecorder | null>(null);
     const recordingChunksRef = useRef<BlobPart[]>([]);
     const inputRef = useRef<HTMLInputElement>(null);
+    const messagesContainerRef = useRef<HTMLDivElement>(null);
     const messagesEndRef = useRef<HTMLDivElement>(null);
+    const peerKeyRef = useRef('');
+    const peerKey = groupId === null ? 'saved' : String(groupId);
 
     useEffect(() => {
-        loadMessages();
-        const timer = window.setInterval(() => loadMessages(true), 5000);
+        peerKeyRef.current = peerKey;
+        const cached = readTelegramMessageCache<ChatMessage>(peerKey);
+        const hasCachedMessages = Boolean(cached?.messages.length);
+
+        setMessages(cached?.messages || []);
+        setBeforeMessageId(cached?.nextBeforeMessageId || null);
+        setHasOlderMessages(Boolean(cached?.hasMore));
+        setLoading(!hasCachedMessages);
+        setLoadingOlder(false);
+        setError(null);
+        if (hasCachedMessages) {
+            scrollToBottom('auto');
+        }
+
+        loadMessages({ silent: hasCachedMessages, forceScroll: !hasCachedMessages });
+        const timer = window.setInterval(() => loadMessages({ silent: true }), 5000);
         return () => window.clearInterval(timer);
     }, [groupId]);
 
@@ -135,24 +165,103 @@ export function TeamChat({
     }, [recording, recordingStartedAt]);
 
     useEffect(() => {
-        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }, [messages]);
+        if (messages.length === 0) return;
+        saveTelegramMessageCache(peerKey, messages, beforeMessageId, hasOlderMessages);
+    }, [messages, beforeMessageId, hasOlderMessages, peerKey]);
 
-    const loadMessages = async (silent = false) => {
+    const isNearBottom = () => {
+        const container = messagesContainerRef.current;
+        if (!container) return true;
+        return container.scrollHeight - container.scrollTop - container.clientHeight < 160;
+    };
+
+    const scrollToBottom = (behavior: ScrollBehavior = 'auto') => {
+        requestAnimationFrame(() => {
+            messagesEndRef.current?.scrollIntoView({ behavior });
+        });
+    };
+
+    const mergeMessages = (current: ChatMessage[], incoming: ChatMessage[]) => {
+        const byId = new Map<number, ChatMessage>();
+        [...current, ...incoming].forEach((message) => {
+            byId.set(message.id, { ...byId.get(message.id), ...message });
+        });
+
+        return Array.from(byId.values()).sort((a, b) => {
+            if (a.pending !== b.pending) return a.pending ? 1 : -1;
+            if (a.pending && b.pending) return a.date.localeCompare(b.date);
+            return a.id - b.id;
+        });
+    };
+
+    const loadMessages = async ({
+        silent = false,
+        forceScroll = false,
+    }: { silent?: boolean; forceScroll?: boolean } = {}) => {
         try {
             if (!silent) setLoading(true);
             setError(null);
-            const result = await invoke<ChatMessage[]>('cmd_get_team_messages', { teamId: groupId, limit: 1000 });
+            const shouldStickToBottom = forceScroll || isNearBottom();
+            const activePeerKey = peerKey;
+            const result = await invoke<MessagesResponse>('cmd_get_team_messages', {
+                teamId: groupId,
+                limit: MESSAGES_PAGE_SIZE,
+            });
+            if (peerKeyRef.current !== activePeerKey) return;
+            const latestMessages = result.messages.slice().reverse();
+            setBeforeMessageId(result.next_before_message_id);
+            setHasOlderMessages(result.has_more);
             setMessages((current) => {
                 const pending = current.filter(message => message.pending);
-                return [...result.slice().reverse(), ...pending];
+                return mergeMessages(current.filter(message => !message.pending), [...latestMessages, ...pending]);
             });
+            if (shouldStickToBottom) {
+                scrollToBottom(forceScroll ? 'auto' : 'smooth');
+            }
         } catch (e) {
             setError(String(e));
             if (!silent) toast.error(`Failed to load messages: ${e}`);
         } finally {
             if (!silent) setLoading(false);
         }
+    };
+
+    const loadOlderMessages = async () => {
+        if (!hasOlderMessages || loadingOlder || !beforeMessageId) return;
+
+        const container = messagesContainerRef.current;
+        const previousScrollHeight = container?.scrollHeight || 0;
+        const previousScrollTop = container?.scrollTop || 0;
+
+        try {
+            setLoadingOlder(true);
+            const activePeerKey = peerKey;
+            const result = await invoke<MessagesResponse>('cmd_get_team_messages', {
+                teamId: groupId,
+                limit: MESSAGES_PAGE_SIZE,
+                beforeMessageId,
+            });
+            if (peerKeyRef.current !== activePeerKey) return;
+            const olderMessages = result.messages.slice().reverse();
+            setBeforeMessageId(result.next_before_message_id);
+            setHasOlderMessages(result.has_more);
+            setMessages((current) => mergeMessages(olderMessages, current));
+            requestAnimationFrame(() => {
+                if (!container) return;
+                const heightDelta = container.scrollHeight - previousScrollHeight;
+                container.scrollTop = previousScrollTop + heightDelta;
+            });
+        } catch (e) {
+            toast.error(`Failed to load older messages: ${e}`);
+        } finally {
+            setLoadingOlder(false);
+        }
+    };
+
+    const handleMessagesScroll = () => {
+        const container = messagesContainerRef.current;
+        if (!container || container.scrollTop > SCROLLBACK_THRESHOLD) return;
+        loadOlderMessages();
     };
 
     const handleSend = async () => {
@@ -172,7 +281,7 @@ export function TeamChat({
                 await invoke('cmd_send_team_message', { teamId: groupId, message: newMessage });
             }
             setNewMessage('');
-            loadMessages(true);
+            loadMessages({ silent: true, forceScroll: true });
         } catch (e) {
             toast.error(`Failed to send: ${e}`);
         } finally {
@@ -221,7 +330,7 @@ export function TeamChat({
         try {
             await invoke('cmd_pin_team_message', { teamId: groupId, messageId });
             toast.success('Message pinned');
-            loadMessages(true);
+            loadMessages({ silent: true });
         } catch (e) {
             toast.error(`Failed to pin message: ${e}`);
         }
@@ -263,7 +372,7 @@ export function TeamChat({
                         transferId: `voice-${groupId ?? 'self'}-${Date.now()}`,
                     });
                     toast.success('Voice message sent');
-                    loadMessages(true);
+                    loadMessages({ silent: true, forceScroll: true });
                 } catch (e) {
                     toast.error(`Failed to send voice message: ${e}`);
                 } finally {
@@ -307,11 +416,49 @@ export function TeamChat({
     };
 
     const formatTime = (dateStr: string) => {
-        const parsed = new Date(dateStr.replace(' ', 'T'));
+        const parsed = parseMessageDate(dateStr);
         if (!Number.isNaN(parsed.getTime())) {
             return parsed.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
         }
         return dateStr.split(' ')[1]?.slice(0, 5) || dateStr;
+    };
+
+    const parseMessageDate = (dateStr: string) => {
+        const normalized = dateStr.trim().replace(/\sUTC$/, 'Z');
+        return new Date(normalized.includes('T') ? normalized : normalized.replace(' ', 'T'));
+    };
+
+    const dateKeyForMessage = (dateStr: string) => {
+        const parsed = parseMessageDate(dateStr);
+        if (Number.isNaN(parsed.getTime())) {
+            return dateStr.split(' ')[0] || dateStr;
+        }
+        const year = parsed.getFullYear();
+        const month = String(parsed.getMonth() + 1).padStart(2, '0');
+        const day = String(parsed.getDate()).padStart(2, '0');
+        return `${year}-${month}-${day}`;
+    };
+
+    const formatDateSeparator = (dateStr: string) => {
+        const parsed = parseMessageDate(dateStr);
+        if (Number.isNaN(parsed.getTime())) {
+            return dateKeyForMessage(dateStr);
+        }
+
+        const today = new Date();
+        const yesterday = new Date(today);
+        yesterday.setDate(today.getDate() - 1);
+        const key = dateKeyForMessage(dateStr);
+
+        if (key === dateKeyForMessage(today.toISOString())) return 'Today';
+        if (key === dateKeyForMessage(yesterday.toISOString())) return 'Yesterday';
+
+        return parsed.toLocaleDateString([], {
+            weekday: 'short',
+            month: 'short',
+            day: 'numeric',
+            year: parsed.getFullYear() === today.getFullYear() ? undefined : 'numeric',
+        });
     };
 
     const formatFileSize = (bytes: number) => {
@@ -356,6 +503,7 @@ export function TeamChat({
                 pending: true,
             },
         ]));
+        scrollToBottom('smooth');
     };
 
     const mediaStreamUrl = (msg: ChatMessage) => {
@@ -454,14 +602,18 @@ export function TeamChat({
                 </div>
             </div>
 
-            <div className="flex-1 overflow-y-auto px-4 py-5 custom-scrollbar">
+            <div
+                ref={messagesContainerRef}
+                onScroll={handleMessagesScroll}
+                className="flex-1 overflow-y-auto px-4 py-5 custom-scrollbar"
+            >
                 {loading ? (
                     <div className="h-full flex items-center justify-center text-sm text-telegram-subtext">Loading messages...</div>
                 ) : error && messages.length === 0 ? (
                     <div className="h-full flex flex-col items-center justify-center text-sm text-telegram-subtext">
                         <p className="text-red-400">Error loading messages</p>
                         <p className="mt-2 max-w-md text-center text-xs">{error}</p>
-                        <button onClick={() => loadMessages()} className="mt-4 px-4 py-2 bg-telegram-primary text-white rounded-lg">
+                        <button onClick={() => loadMessages({ forceScroll: true })} className="mt-4 px-4 py-2 bg-telegram-primary text-white rounded-lg">
                             Retry
                         </button>
                     </div>
@@ -471,101 +623,124 @@ export function TeamChat({
                     </div>
                 ) : (
                     <div className="space-y-2">
-                        {messages.map((msg) => {
+                        {(loadingOlder || hasOlderMessages) && (
+                            <div className="flex justify-center py-1">
+                                <button
+                                    onClick={loadOlderMessages}
+                                    disabled={loadingOlder}
+                                    className="rounded-full px-3 py-1 text-xs text-[#8a8a8a] hover:bg-white/5 hover:text-white disabled:opacity-60"
+                                >
+                                    {loadingOlder ? 'Loading older messages...' : 'Load older messages'}
+                                </button>
+                            </div>
+                        )}
+                        {messages.map((msg, index) => {
                             const outgoing = Boolean(msg.outgoing);
+                            const currentDateKey = dateKeyForMessage(msg.date);
+                            const previousDateKey = index > 0 ? dateKeyForMessage(messages[index - 1].date) : null;
+                            const showDateSeparator = currentDateKey !== previousDateKey;
                             return (
-                                <div key={msg.id} className={`group flex ${outgoing ? 'justify-end' : 'justify-start'}`}>
-                                    <div className={`flex gap-2 max-w-[78%] ${outgoing ? 'flex-row-reverse' : ''}`}>
-                                        {!outgoing && !isDirect && (
-                                            <TelegramAvatar
-                                                user={{ user_id: msg.sender_id, first_name: msg.sender_name, photo_url: msg.sender_photo_url }}
-                                                token={streamToken}
-                                                baseUrl={streamBaseUrl}
-                                                size="md"
-                                                className="mt-1"
-                                            />
-                                        )}
-                                        <div
-                                            className={`rounded-[18px] px-3 py-2 shadow-sm ${
-                                                outgoing
-                                                    ? 'rounded-br-md bg-[#262626] text-white border border-[#343434]'
-                                                    : 'rounded-bl-md bg-[#141414] text-[#f5f5f5] border border-[#242424]'
-                                            }`}
-                                        >
+                                <div key={msg.id}>
+                                    {showDateSeparator && (
+                                        <div className="sticky top-2 z-10 my-4 flex justify-center">
+                                            <span className="rounded-full border border-[#242424] bg-[#111111]/95 px-3 py-1 text-[11px] font-medium text-[#b0b0b0] shadow-sm backdrop-blur">
+                                                {formatDateSeparator(msg.date)}
+                                            </span>
+                                        </div>
+                                    )}
+                                    <div className={`group flex ${outgoing ? 'justify-end' : 'justify-start'}`}>
+                                        <div className={`flex gap-2 max-w-[78%] ${outgoing ? 'flex-row-reverse' : ''}`}>
                                             {!outgoing && !isDirect && (
-                                                <p className="mb-1 text-xs font-semibold text-telegram-primary">{msg.sender_name}</p>
+                                                <TelegramAvatar
+                                                    user={{ user_id: msg.sender_id, first_name: msg.sender_name, photo_url: msg.sender_photo_url }}
+                                                    token={streamToken}
+                                                    baseUrl={streamBaseUrl}
+                                                    size="md"
+                                                    className="mt-1"
+                                                />
                                             )}
-                                            {msg.has_media && msg.media_type !== 'none' && (
-                                                <div className="mb-2 overflow-hidden rounded-xl">
-                                                    {['photo', 'image'].includes(msg.media_type) && mediaStreamUrl(msg) ? (
-                                                        <button onClick={() => handleDownload(msg)} className="block max-w-80 overflow-hidden rounded-xl bg-black/20">
-                                                            <img src={mediaStreamUrl(msg) || ''} alt="" className="max-h-80 w-full object-cover" />
-                                                        </button>
-                                                    ) : null}
-                                                    <button
-                                                        onClick={() => handleDownload(msg)}
-                                                        disabled={downloadingId === msg.id || msg.pending}
-                                                        className={`mt-1 flex w-full min-w-56 items-center gap-3 rounded-xl p-3 text-left transition-colors ${
-                                                            outgoing ? 'bg-white/10 hover:bg-white/15' : 'bg-[#202020] hover:bg-[#292929]'
-                                                        } disabled:opacity-60`}
-                                                    >
-                                                        <span className="flex h-10 w-10 items-center justify-center rounded-full bg-[#333333] text-white">
-                                                            {downloadingId === msg.id || msg.pending ? <File className="w-5 h-5 animate-pulse" /> : getMediaIcon(msg.media_type)}
-                                                        </span>
-                                                        <span className="min-w-0 flex-1">
-                                                            <span className="block truncate text-sm font-medium">{msg.media_name || msg.media_type}</span>
-                                                            <span className="text-xs opacity-75">{msg.pending ? 'Sending...' : msg.media_size > 0 ? formatFileSize(msg.media_size) : 'Attachment'}</span>
-                                                        </span>
-                                                        {!msg.pending && <Download className="w-4 h-4 opacity-75" />}
-                                                    </button>
-                                                </div>
-                                            )}
-                                            {msg.text && (
-                                                <p className="whitespace-pre-wrap break-words text-sm leading-relaxed">{msg.text}</p>
-                                            )}
-                                            <div className={`mt-1 flex items-center justify-end gap-2 text-[10px] ${outgoing ? 'text-white/70' : 'text-[#8a8a8a]'}`}>
-                                                {msg.pinned && <Pin className="h-3 w-3" />}
-                                                <button
-                                                    onClick={() => handlePin(msg.id)}
-                                                    className="opacity-0 transition-opacity hover:opacity-100 group-hover:opacity-100"
-                                                    title="Pin message"
-                                                >
-                                                    <Pin className="h-3 w-3" />
-                                                </button>
-                                                <span>{formatTime(msg.date)}</span>
-                                            </div>
-                                            {(reactions[String(msg.id)]?.length || reactionPickerFor === msg.id) && (
-                                                <div className="relative mt-1 flex flex-wrap justify-end gap-1">
-                                                    {reactions[String(msg.id)]?.map(emoji => (
-                                                        <button
-                                                            key={emoji}
-                                                            onClick={() => saveReaction(msg.id, emoji)}
-                                                            className="rounded-full bg-black/20 px-2 py-0.5 text-xs"
-                                                        >
-                                                            {emoji}
-                                                        </button>
-                                                    ))}
-                                                    {reactionPickerFor === msg.id && (
-                                                        <div className="absolute bottom-7 right-0 flex rounded-full border border-[#242424] bg-[#0f0f0f] p-1 shadow-2xl">
-                                                            {reactionEmojis.map(emoji => (
-                                                                <button
-                                                                    key={emoji}
-                                                                    onClick={() => saveReaction(msg.id, emoji)}
-                                                                    className="rounded-full p-1.5 text-lg hover:bg-white/10"
-                                                                >
-                                                                    {emoji}
-                                                                </button>
-                                                            ))}
-                                                        </div>
-                                                    )}
-                                                </div>
-                                            )}
-                                            <button
-                                                onClick={() => setReactionPickerFor(reactionPickerFor === msg.id ? null : msg.id)}
-                                                className="mt-1 text-[10px] text-[#8a8a8a] opacity-0 transition-opacity group-hover:opacity-100"
+                                            <div
+                                                className={`rounded-[18px] px-3 py-2 shadow-sm ${
+                                                    outgoing
+                                                        ? 'rounded-br-md bg-[#262626] text-white border border-[#343434]'
+                                                        : 'rounded-bl-md bg-[#141414] text-[#f5f5f5] border border-[#242424]'
+                                                }`}
                                             >
-                                                React
-                                            </button>
+                                                {!outgoing && !isDirect && (
+                                                    <p className="mb-1 text-xs font-semibold text-telegram-primary">{msg.sender_name}</p>
+                                                )}
+                                                {msg.has_media && msg.media_type !== 'none' && (
+                                                    <div className="mb-2 overflow-hidden rounded-xl">
+                                                        {['photo', 'image'].includes(msg.media_type) && mediaStreamUrl(msg) ? (
+                                                            <button onClick={() => handleDownload(msg)} className="block max-w-80 overflow-hidden rounded-xl bg-black/20">
+                                                                <img src={mediaStreamUrl(msg) || ''} alt="" className="max-h-80 w-full object-cover" />
+                                                            </button>
+                                                        ) : null}
+                                                        <button
+                                                            onClick={() => handleDownload(msg)}
+                                                            disabled={downloadingId === msg.id || msg.pending}
+                                                            className={`mt-1 flex w-full min-w-56 items-center gap-3 rounded-xl p-3 text-left transition-colors ${
+                                                                outgoing ? 'bg-white/10 hover:bg-white/15' : 'bg-[#202020] hover:bg-[#292929]'
+                                                            } disabled:opacity-60`}
+                                                        >
+                                                            <span className="flex h-10 w-10 items-center justify-center rounded-full bg-[#333333] text-white">
+                                                                {downloadingId === msg.id || msg.pending ? <File className="w-5 h-5 animate-pulse" /> : getMediaIcon(msg.media_type)}
+                                                            </span>
+                                                            <span className="min-w-0 flex-1">
+                                                                <span className="block truncate text-sm font-medium">{msg.media_name || msg.media_type}</span>
+                                                                <span className="text-xs opacity-75">{msg.pending ? 'Sending...' : msg.media_size > 0 ? formatFileSize(msg.media_size) : 'Attachment'}</span>
+                                                            </span>
+                                                            {!msg.pending && <Download className="w-4 h-4 opacity-75" />}
+                                                        </button>
+                                                    </div>
+                                                )}
+                                                {msg.text && (
+                                                    <p className="whitespace-pre-wrap break-words text-sm leading-relaxed">{msg.text}</p>
+                                                )}
+                                                <div className={`mt-1 flex items-center justify-end gap-2 text-[10px] ${outgoing ? 'text-white/70' : 'text-[#8a8a8a]'}`}>
+                                                    {msg.pinned && <Pin className="h-3 w-3" />}
+                                                    <button
+                                                        onClick={() => handlePin(msg.id)}
+                                                        className="opacity-0 transition-opacity hover:opacity-100 group-hover:opacity-100"
+                                                        title="Pin message"
+                                                    >
+                                                        <Pin className="h-3 w-3" />
+                                                    </button>
+                                                    <span>{formatTime(msg.date)}</span>
+                                                </div>
+                                                {(reactions[String(msg.id)]?.length || reactionPickerFor === msg.id) && (
+                                                    <div className="relative mt-1 flex flex-wrap justify-end gap-1">
+                                                        {reactions[String(msg.id)]?.map(emoji => (
+                                                            <button
+                                                                key={emoji}
+                                                                onClick={() => saveReaction(msg.id, emoji)}
+                                                                className="rounded-full bg-black/20 px-2 py-0.5 text-xs"
+                                                            >
+                                                                {emoji}
+                                                            </button>
+                                                        ))}
+                                                        {reactionPickerFor === msg.id && (
+                                                            <div className="absolute bottom-7 right-0 flex rounded-full border border-[#242424] bg-[#0f0f0f] p-1 shadow-2xl">
+                                                                {reactionEmojis.map(emoji => (
+                                                                    <button
+                                                                        key={emoji}
+                                                                        onClick={() => saveReaction(msg.id, emoji)}
+                                                                        className="rounded-full p-1.5 text-lg hover:bg-white/10"
+                                                                    >
+                                                                        {emoji}
+                                                                    </button>
+                                                                ))}
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                )}
+                                                <button
+                                                    onClick={() => setReactionPickerFor(reactionPickerFor === msg.id ? null : msg.id)}
+                                                    className="mt-1 text-[10px] text-[#8a8a8a] opacity-0 transition-opacity group-hover:opacity-100"
+                                                >
+                                                    React
+                                                </button>
+                                            </div>
                                         </div>
                                     </div>
                                 </div>

@@ -1,8 +1,9 @@
-use tauri::State;
+use crate::commands::utils::{map_error, resolve_peer};
+use crate::TelegramState;
 use grammers_client::types::Peer;
 use grammers_tl_types as tl;
-use crate::TelegramState;
-use crate::commands::utils::{resolve_peer, map_error};
+use std::collections::{HashMap, HashSet};
+use tauri::State;
 
 #[derive(Clone, serde::Serialize)]
 pub struct TeamInfo {
@@ -76,15 +77,19 @@ fn peer_to_input_peer(peer: &Peer) -> Result<tl::enums::InputPeer, String> {
                 user_id: u.raw.id(),
                 access_hash,
             }))
-        },
+        }
         Peer::Group(g) => match &g.raw {
-            tl::enums::Chat::Chat(chat) => Ok(tl::enums::InputPeer::Chat(tl::types::InputPeerChat {
-                chat_id: chat.id,
-            })),
-            tl::enums::Chat::Channel(channel) => Ok(tl::enums::InputPeer::Channel(tl::types::InputPeerChannel {
-                channel_id: channel.id,
-                access_hash: channel.access_hash.ok_or("No access hash for group")?,
-            })),
+            tl::enums::Chat::Chat(chat) => {
+                Ok(tl::enums::InputPeer::Chat(tl::types::InputPeerChat {
+                    chat_id: chat.id,
+                }))
+            }
+            tl::enums::Chat::Channel(channel) => {
+                Ok(tl::enums::InputPeer::Channel(tl::types::InputPeerChannel {
+                    channel_id: channel.id,
+                    access_hash: channel.access_hash.ok_or("No access hash for group")?,
+                }))
+            }
             _ => Err("Unsupported group type".to_string()),
         },
     }
@@ -120,6 +125,27 @@ where
 }
 
 #[derive(Clone, serde::Serialize)]
+pub struct TeamsResponse {
+    pub teams: Vec<TeamInfo>,
+    pub next_before_date: Option<i64>,
+    pub has_more: bool,
+}
+
+#[derive(Clone, serde::Serialize)]
+pub struct DirectChatsResponse {
+    pub chats: Vec<DirectChatInfo>,
+    pub next_before_date: Option<i64>,
+    pub has_more: bool,
+}
+
+#[derive(Clone, serde::Serialize)]
+pub struct MessagesResponse {
+    pub messages: Vec<ChatMessage>,
+    pub next_before_message_id: Option<i32>,
+    pub has_more: bool,
+}
+
+#[derive(Clone, serde::Serialize)]
 pub struct ChatMessage {
     pub id: i32,
     pub sender_id: i64,
@@ -145,7 +171,12 @@ fn user_has_photo(user: &tl::enums::User) -> bool {
         _ => false,
     };
     if let tl::enums::User::User(u) = user {
-        log::debug!("[AUTH] User {} (ID: {}) has photo: {}", u.first_name.clone().unwrap_or_default(), u.id, has_photo);
+        log::debug!(
+            "[AUTH] User {} (ID: {}) has photo: {}",
+            u.first_name.clone().unwrap_or_default(),
+            u.id,
+            has_photo
+        );
     }
     has_photo
 }
@@ -180,24 +211,33 @@ pub async fn cmd_get_current_user(
         first_name: user.first_name().unwrap_or("You").to_string(),
         last_name: user.last_name().map(|s| s.to_string()),
         username: user.username().map(|s| s.to_string()),
-        photo_url: if user_has_photo(&user.raw) { Some("present".to_string()) } else { None },
+        photo_url: if user_has_photo(&user.raw) {
+            Some("present".to_string())
+        } else {
+            None
+        },
     }))
 }
 
 #[tauri::command]
 pub async fn cmd_get_teams(
     state: State<'_, TelegramState>,
-) -> Result<Vec<TeamInfo>, String> {
+    _before_date: Option<i64>,
+) -> Result<TeamsResponse, String> {
     let client_opt = state.client.lock().await.clone();
     if client_opt.is_none() {
-        return Ok(Vec::new());
+        return Ok(TeamsResponse {
+            teams: Vec::new(),
+            next_before_date: None,
+            has_more: false,
+        });
     }
     let client = client_opt.unwrap();
     let mut teams = Vec::new();
-    
-    log::info!("Fetching all dialogs for groups list...");
+
+    log::info!("Fetching all Telegram group dialogs for Teams");
     let mut dialogs = client.iter_dialogs();
-    
+
     while let Some(dialog) = dialogs.next().await.map_err(|e| e.to_string())? {
         match &dialog.peer {
             Peer::Channel(c) => {
@@ -207,7 +247,12 @@ pub async fn cmd_get_teams(
                 let name = c.raw.title.clone();
                 let username = c.raw.username.clone();
                 let id = c.raw.id;
-                
+                state
+                    .peer_cache
+                    .write()
+                    .await
+                    .insert(id, dialog.peer.clone());
+
                 teams.push(TeamInfo {
                     id,
                     name,
@@ -217,17 +262,28 @@ pub async fn cmd_get_teams(
                     is_supergroup: c.raw.megagroup,
                     top_members: Vec::new(),
                     unread_count: get_dialog_unread_count(&dialog.raw),
-                    photo_url: if chat_has_photo(&tl::enums::Chat::Channel(c.raw.clone())) { Some("present".to_string()) } else { None },
+                    photo_url: if chat_has_photo(&tl::enums::Chat::Channel(c.raw.clone())) {
+                        Some("present".to_string())
+                    } else {
+                        None
+                    },
                 });
-            },
+            }
             Peer::Group(g) => {
                 let title = match &g.raw {
                     grammers_tl_types::enums::Chat::Chat(c) => c.title.clone(),
                     grammers_tl_types::enums::Chat::Channel(c) => c.title.clone(),
                     _ => "Unknown Group".to_string(),
                 };
+                let id = g.raw.id();
+                state
+                    .peer_cache
+                    .write()
+                    .await
+                    .insert(id, dialog.peer.clone());
+
                 teams.push(TeamInfo {
-                    id: g.raw.id(),
+                    id,
                     name: title,
                     username: None,
                     member_count: 0,
@@ -235,30 +291,44 @@ pub async fn cmd_get_teams(
                     is_supergroup: false,
                     top_members: Vec::new(),
                     unread_count: get_dialog_unread_count(&dialog.raw),
-                    photo_url: if chat_has_photo(&g.raw) { Some("present".to_string()) } else { None },
+                    photo_url: if chat_has_photo(&g.raw) {
+                        Some("present".to_string())
+                    } else {
+                        None
+                    },
                 });
-            },
+            }
             _ => {}
         }
     }
-    
-    log::info!("Found {} groups", teams.len());
-    Ok(teams)
+
+    log::info!("Found {} joined Telegram groups", teams.len());
+    Ok(TeamsResponse {
+        teams,
+        next_before_date: None,
+        has_more: false,
+    })
 }
 
 #[tauri::command]
 pub async fn cmd_get_direct_chats(
     state: State<'_, TelegramState>,
-) -> Result<Vec<DirectChatInfo>, String> {
+    _before_date: Option<i64>,
+) -> Result<DirectChatsResponse, String> {
     let client_opt = state.client.lock().await.clone();
     if client_opt.is_none() {
-        return Ok(Vec::new());
+        return Ok(DirectChatsResponse {
+            chats: Vec::new(),
+            next_before_date: None,
+            has_more: false,
+        });
     }
     let client = client_opt.unwrap();
     let current_user_id = client.get_me().await.map_err(map_error)?.raw.id();
-    let mut direct_chats = Vec::new();
+    let mut direct_by_id: HashMap<i64, DirectChatInfo> = HashMap::new();
+    let mut dialog_order: Vec<i64> = Vec::new();
 
-    log::info!("Fetching direct one-on-one Telegram dialogs...");
+    log::info!("Fetching all direct Telegram dialogs and contacts");
     let mut dialogs = client.iter_dialogs();
 
     while let Some(dialog) = dialogs.next().await.map_err(|e| e.to_string())? {
@@ -273,9 +343,13 @@ pub async fn cmd_get_direct_chats(
                 _ => (None, None),
             };
 
-            state.peer_cache.write().await.insert(user_id, dialog.peer.clone());
+            state
+                .peer_cache
+                .write()
+                .await
+                .insert(user_id, dialog.peer.clone());
 
-            direct_chats.push(DirectChatInfo {
+            direct_by_id.insert(user_id, DirectChatInfo {
                 user_id,
                 first_name: user.first_name().unwrap_or("Unknown").to_string(),
                 last_name: user.last_name().map(|s| s.to_string()),
@@ -291,11 +365,93 @@ pub async fn cmd_get_direct_chats(
                 },
                 access_hash,
             });
+            dialog_order.push(user_id);
         }
     }
 
-    log::info!("Found {} direct chats", direct_chats.len());
-    Ok(direct_chats)
+    let contact_result = client
+        .invoke(&tl::functions::contacts::GetContacts { hash: 0 })
+        .await
+        .map_err(map_error)?;
+
+    match contact_result {
+        tl::enums::contacts::Contacts::Contacts(c) => {
+            log::info!(
+                "Merging {} Telegram contacts into direct chats",
+                c.users.len()
+            );
+            for user in c.users {
+                if let tl::enums::User::User(u) = user {
+                    if u.id == current_user_id {
+                        continue;
+                    }
+
+                    let u_raw = tl::enums::User::User(u.clone());
+                    state.peer_cache.write().await.insert(
+                        u.id,
+                        Peer::User(grammers_client::types::User::from_raw(u_raw.clone())),
+                    );
+
+                    direct_by_id.entry(u.id).or_insert_with(|| DirectChatInfo {
+                        user_id: u.id,
+                        first_name: u.first_name.clone().unwrap_or_else(|| "Unknown".to_string()),
+                        last_name: u.last_name.clone(),
+                        username: u.username.clone(),
+                        phone: u.phone.clone(),
+                        photo_url: if user_has_photo(&u_raw) { Some("present".to_string()) } else { None },
+                        unread_count: 0,
+                        invite_eligible: u.mutual_contact,
+                        invite_restriction: if u.mutual_contact {
+                            None
+                        } else {
+                            Some("Telegram only allows direct invites for mutual contacts. Share an invite link with this person instead.".to_string())
+                        },
+                        access_hash: u.access_hash,
+                    });
+                }
+            }
+        }
+        tl::enums::contacts::Contacts::NotModified => {
+            log::info!("Telegram contacts not modified while loading direct chats");
+        }
+    }
+
+    let mut ordered = Vec::new();
+    let mut seen = HashSet::new();
+    for user_id in dialog_order {
+        if seen.insert(user_id) {
+            if let Some(chat) = direct_by_id.remove(&user_id) {
+                ordered.push(chat);
+            }
+        }
+    }
+
+    let mut contact_only: Vec<_> = direct_by_id.into_values().collect();
+    contact_only.sort_by(|a, b| {
+        let a_name = format!(
+            "{} {} {}",
+            a.first_name,
+            a.last_name.clone().unwrap_or_default(),
+            a.username.clone().unwrap_or_default()
+        )
+        .to_lowercase();
+        let b_name = format!(
+            "{} {} {}",
+            b.first_name,
+            b.last_name.clone().unwrap_or_default(),
+            b.username.clone().unwrap_or_default()
+        )
+        .to_lowercase();
+        a_name.cmp(&b_name)
+    });
+    ordered.extend(contact_only);
+
+    log::info!("Found {} direct Telegram chats and contacts", ordered.len());
+    Ok(DirectChatsResponse {
+        chats: ordered,
+        next_before_date: None,
+        has_more: false,
+    })
 }
 
 fn get_dialog_unread_count(dialog: &tl::enums::Dialog) -> i32 {
@@ -315,26 +471,26 @@ pub async fn cmd_get_team_members(
         return Ok(Vec::new());
     }
     let client = client_opt.unwrap();
-    
+
     log::info!("Fetching members for team/channel: {}", team_id);
-    
+
     let peer = resolve_peer(&client, Some(team_id), &state.peer_cache).await?;
-    
+
     let mut members = Vec::new();
     let mut participants = client.iter_participants(&peer);
-    
+
     // Limit to 100 members for performance
     let mut count = 0;
     while let Some(participant) = participants.next().await.map_err(|e| e.to_string())? {
         if count >= 100 {
             break;
         }
-        
+
         let user = &participant.user;
         let first_name = user.first_name().unwrap_or("Unknown").to_string();
         let last_name = user.last_name().map(|s| s.to_string());
         let username = user.username().map(|s| s.to_string());
-        
+
         // Basic role detection from the grammers-client Role
         let (is_admin, is_owner, role_name) = match &participant.role {
             grammers_client::types::Role::Creator(_) => (true, true, "owner".to_string()),
@@ -351,7 +507,11 @@ pub async fn cmd_get_team_members(
             is_admin,
             is_owner,
             role: role_name,
-            photo_url: if user_has_photo(&user.raw) { Some("present".to_string()) } else { None },
+            photo_url: if user_has_photo(&user.raw) {
+                Some("present".to_string())
+            } else {
+                None
+            },
             access_hash: match &user.raw {
                 tl::enums::User::User(u) => u.access_hash,
                 _ => None,
@@ -359,10 +519,10 @@ pub async fn cmd_get_team_members(
             invite_eligible: true,
             invite_restriction: None,
         });
-        
+
         count += 1;
     }
-    
+
     log::info!("Found {} members for team {}", members.len(), team_id);
     Ok(members)
 }
@@ -377,28 +537,34 @@ pub async fn cmd_search_users(
         return Ok(Vec::new());
     }
     let client = client_opt.unwrap();
-    
+
     log::info!("Searching users with query: {}", query);
-    
-    let result = client.invoke(&tl::functions::contacts::Search {
-        q: query.clone(),
-        limit: 20,
-    }).await.map_err(map_error)?;
-    
+
+    let result = client
+        .invoke(&tl::functions::contacts::Search {
+            q: query.clone(),
+            limit: 20,
+        })
+        .await
+        .map_err(map_error)?;
+
     let mut results = Vec::new();
-    
+
     let f = match result {
         tl::enums::contacts::Found::Found(f) => f,
     };
-    
+
     for user in f.users {
         if let tl::enums::User::User(u) = user {
-            let first_name = u.first_name.clone().unwrap_or_else(|| "Unknown".to_string());
+            let first_name = u
+                .first_name
+                .clone()
+                .unwrap_or_else(|| "Unknown".to_string());
             let last_name = u.last_name.clone();
             let username = u.username.clone();
             let phone = u.phone.clone();
             let u_raw = tl::enums::User::User(u.clone());
-            
+
             results.push(TeamMember {
                 user_id: u.id,
                 first_name,
@@ -423,7 +589,7 @@ pub async fn cmd_search_users(
             );
         }
     }
-    
+
     log::info!("Found {} users matching query", results.len());
     Ok(results)
 }
@@ -439,57 +605,80 @@ pub async fn cmd_debug_subscriber_flow(
         return Err("Client not connected".to_string());
     }
     let client = client_opt.unwrap();
-    
+
     log::info!("DEBUG: Searching for '{}'", query);
-    let result = client.invoke(&tl::functions::contacts::Search {
-        q: query.clone(),
-        limit: 10,
-    }).await.map_err(map_error)?;
-    
+    let result = client
+        .invoke(&tl::functions::contacts::Search {
+            q: query.clone(),
+            limit: 10,
+        })
+        .await
+        .map_err(map_error)?;
+
     let mut debug_info = format!("Search results for '{}':\n", query);
-    
+
     let tl::enums::contacts::Found::Found(f) = result;
     for user in f.users {
         if let tl::enums::User::User(u) = user {
-            let name = format!("{} {}", u.first_name.clone().unwrap_or_default(), u.last_name.clone().unwrap_or_default());
-            debug_info.push_str(&format!("- User: {} (ID: {}, Hash: {})\n", name, u.id, u.access_hash.unwrap_or(0)));
+            let name = format!(
+                "{} {}",
+                u.first_name.clone().unwrap_or_default(),
+                u.last_name.clone().unwrap_or_default()
+            );
+            debug_info.push_str(&format!(
+                "- User: {} (ID: {}, Hash: {})\n",
+                name,
+                u.id,
+                u.access_hash.unwrap_or(0)
+            ));
             debug_info.push_str(&format!("  Caching peer for user {}...\n", u.id));
-            state.peer_cache.write().await.insert(u.id, Peer::User(grammers_client::types::User::from_raw(tl::enums::User::User(u.clone()))));
+            state.peer_cache.write().await.insert(
+                u.id,
+                Peer::User(grammers_client::types::User::from_raw(
+                    tl::enums::User::User(u.clone()),
+                )),
+            );
         }
     }
-    
+
     Ok(debug_info)
 }
 
 #[tauri::command]
-pub async fn cmd_get_contacts(
-    state: State<'_, TelegramState>,
-) -> Result<Vec<TeamMember>, String> {
+pub async fn cmd_get_contacts(state: State<'_, TelegramState>) -> Result<Vec<TeamMember>, String> {
     let client_opt = state.client.lock().await.clone();
     if client_opt.is_none() {
         return Ok(Vec::new());
     }
     let client = client_opt.unwrap();
-    
+
     log::info!("Fetching Telegram contacts");
-    
-    let result = client.invoke(&tl::functions::contacts::GetContacts {
-        hash: 0,
-    }).await.map_err(map_error)?;
-    
+
+    let result = client
+        .invoke(&tl::functions::contacts::GetContacts { hash: 0 })
+        .await
+        .map_err(map_error)?;
+
     let mut results = Vec::new();
-    
+
     match result {
         tl::enums::contacts::Contacts::Contacts(c) => {
-            log::info!("Received {} contacts and {} users from Telegram", c.contacts.len(), c.users.len());
+            log::info!(
+                "Received {} contacts and {} users from Telegram",
+                c.contacts.len(),
+                c.users.len()
+            );
             for user in c.users {
                 if let tl::enums::User::User(u) = user {
-                    let first_name = u.first_name.clone().unwrap_or_else(|| "Unknown".to_string());
+                    let first_name = u
+                        .first_name
+                        .clone()
+                        .unwrap_or_else(|| "Unknown".to_string());
                     let last_name = u.last_name.clone();
                     let username = u.username.clone();
                     let phone = u.phone.clone();
                     let u_raw = tl::enums::User::User(u.clone());
-                    
+
                     results.push(TeamMember {
                         user_id: u.id,
                         first_name,
@@ -514,12 +703,12 @@ pub async fn cmd_get_contacts(
                     );
                 }
             }
-        },
+        }
         tl::enums::contacts::Contacts::NotModified => {
             log::info!("Contacts not modified since last fetch");
-        },
+        }
     }
-    
+
     log::info!("Found {} contacts", results.len());
     Ok(results)
 }
@@ -536,40 +725,55 @@ pub async fn cmd_add_team_member(
         return Ok(false);
     }
     let client = client_opt.unwrap();
-    
-    let user_id = user_id_str.parse::<i64>().map_err(|_| "Invalid user ID format")?;
-    let access_hash = access_hash_str.and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
 
-    log::info!("Adding user {} (hash: {}) to team {}", user_id, access_hash, team_id);
-    
+    let user_id = user_id_str
+        .parse::<i64>()
+        .map_err(|_| "Invalid user ID format")?;
+    let access_hash = access_hash_str
+        .and_then(|s| s.parse::<i64>().ok())
+        .unwrap_or(0);
+
+    log::info!(
+        "Adding user {} (hash: {}) to team {}",
+        user_id,
+        access_hash,
+        team_id
+    );
+
     let peer = resolve_peer(&client, Some(team_id), &state.peer_cache).await?;
     let input_user = tl::enums::InputUser::User(tl::types::InputUser {
         user_id,
         access_hash,
     });
-    
+
     match &peer {
         Peer::Channel(c) => {
             let input_channel = tl::enums::InputChannel::Channel(tl::types::InputChannel {
                 channel_id: c.raw.id,
                 access_hash: c.raw.access_hash.ok_or("No access hash")?,
             });
-            
-            client.invoke(&tl::functions::channels::InviteToChannel {
-                channel: input_channel,
-                users: vec![input_user],
-            }).await.map_err(|e| format!("Failed to add member: {}", e))?;
-        },
+
+            client
+                .invoke(&tl::functions::channels::InviteToChannel {
+                    channel: input_channel,
+                    users: vec![input_user],
+                })
+                .await
+                .map_err(|e| format!("Failed to add member: {}", e))?;
+        }
         Peer::Group(g) => {
-            client.invoke(&tl::functions::messages::AddChatUser {
-                chat_id: g.raw.id(),
-                user_id: input_user,
-                fwd_limit: 100,
-            }).await.map_err(|e| format!("Failed to add member: {}", e))?;
-        },
+            client
+                .invoke(&tl::functions::messages::AddChatUser {
+                    chat_id: g.raw.id(),
+                    user_id: input_user,
+                    fwd_limit: 100,
+                })
+                .await
+                .map_err(|e| format!("Failed to add member: {}", e))?;
+        }
         _ => return Err("Invalid peer type".to_string()),
     }
-    
+
     Ok(true)
 }
 
@@ -586,7 +790,9 @@ pub async fn cmd_send_team_invite_link(
     }
     let client = client_opt.unwrap();
 
-    let user_id = user_id_str.parse::<i64>().map_err(|_| "Invalid user ID format")?;
+    let user_id = user_id_str
+        .parse::<i64>()
+        .map_err(|_| "Invalid user ID format")?;
     let access_hash = access_hash_str
         .and_then(|s| s.parse::<i64>().ok())
         .unwrap_or(0);
@@ -595,28 +801,38 @@ pub async fn cmd_send_team_invite_link(
     let team_input_peer = peer_to_input_peer(&team_peer)?;
     let team_name = peer_display_name(&team_peer);
 
-    log::info!("Creating invite link for team {} (ID: {})", team_name, team_id);
-    
-    let exported = client.invoke(&tl::functions::messages::ExportChatInvite {
-        legacy_revoke_permanent: false,
-        request_needed: false,
-        peer: team_input_peer,
-        expire_date: None,
-        usage_limit: None,
-        title: Some("TgGuild invite".to_string()),
-        subscription_pricing: None,
-    }).await.map_err(|e| {
-        log::error!("Failed to create invite link: {}", e);
-        format!("Failed to create invite link: {}", e)
-    })?;
+    log::info!(
+        "Creating invite link for team {} (ID: {})",
+        team_name,
+        team_id
+    );
+
+    let exported = client
+        .invoke(&tl::functions::messages::ExportChatInvite {
+            legacy_revoke_permanent: false,
+            request_needed: false,
+            peer: team_input_peer,
+            expire_date: None,
+            usage_limit: None,
+            title: Some("TgGuild invite".to_string()),
+            subscription_pricing: None,
+        })
+        .await
+        .map_err(|e| {
+            log::error!("Failed to create invite link: {}", e);
+            format!("Failed to create invite link: {}", e)
+        })?;
 
     let invite_link = match exported {
         tl::enums::ExportedChatInvite::ChatInviteExported(invite) => {
             log::info!("Successfully created invite link: {}", invite.link);
             invite.link
-        },
+        }
         tl::enums::ExportedChatInvite::ChatInvitePublicJoinRequests => {
-            log::warn!("Team {} uses join requests instead of invite links", team_id);
+            log::warn!(
+                "Team {} uses join requests instead of invite links",
+                team_id
+            );
             return Err("This team is set to require join approval. Please change the group settings to allow invite links, or share the group's username with the user.".to_string());
         }
     };
@@ -626,7 +842,11 @@ pub async fn cmd_send_team_invite_link(
         cache.get(&user_id).cloned()
     };
 
-    log::info!("Sending invite link to user_id: {}, access_hash: {}", user_id, access_hash);
+    log::info!(
+        "Sending invite link to user_id: {}, access_hash: {}",
+        user_id,
+        access_hash
+    );
 
     let target_peer = if let Some(peer) = cached_peer {
         log::info!("Using cached peer for user {}", user_id);
@@ -646,32 +866,35 @@ pub async fn cmd_send_team_invite_link(
     let message = format!("You're invited to join {}:\n{}", team_name, invite_link);
     log::info!("Invite message to send: {}", message);
 
-    match client.invoke(&tl::functions::messages::SendMessage {
-        no_webpage: false,
-        silent: false,
-        background: false,
-        clear_draft: true,
-        noforwards: false,
-        update_stickersets_order: false,
-        invert_media: false,
-        allow_paid_floodskip: false,
-        peer: target_peer,
-        reply_to: None,
-        message,
-        random_id: rand::random::<i64>(),
-        reply_markup: None,
-        entities: None,
-        schedule_date: None,
-        schedule_repeat_period: None,
-        send_as: None,
-        quick_reply_shortcut: None,
-        effect: None,
-        allow_paid_stars: None,
-        suggested_post: None,
-    }).await {
-Ok(_) => {
+    match client
+        .invoke(&tl::functions::messages::SendMessage {
+            no_webpage: false,
+            silent: false,
+            background: false,
+            clear_draft: true,
+            noforwards: false,
+            update_stickersets_order: false,
+            invert_media: false,
+            allow_paid_floodskip: false,
+            peer: target_peer,
+            reply_to: None,
+            message,
+            random_id: rand::random::<i64>(),
+            reply_markup: None,
+            entities: None,
+            schedule_date: None,
+            schedule_repeat_period: None,
+            send_as: None,
+            quick_reply_shortcut: None,
+            effect: None,
+            allow_paid_stars: None,
+            suggested_post: None,
+        })
+        .await
+    {
+        Ok(_) => {
             log::info!("Successfully sent invite link to user {}", user_id);
-        },
+        }
         Err(e) => {
             log::error!("Failed to send invite message: {}", e);
             return Err(format!("Failed to send invite link: {}. The user may have privacy restrictions that prevent receiving messages from non-contacts.", e));
@@ -693,14 +916,18 @@ pub async fn cmd_remove_team_member(
         return Ok(false);
     }
     let client = client_opt.unwrap();
-    
-    let user_id = user_id_str.parse::<i64>().map_err(|_| "Invalid user ID format")?;
-    let access_hash = access_hash_str.and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
+
+    let user_id = user_id_str
+        .parse::<i64>()
+        .map_err(|_| "Invalid user ID format")?;
+    let access_hash = access_hash_str
+        .and_then(|s| s.parse::<i64>().ok())
+        .unwrap_or(0);
 
     log::info!("Removing user {} from team {}", user_id, team_id);
-    
+
     let peer = resolve_peer(&client, Some(team_id), &state.peer_cache).await?;
-    
+
     match &peer {
         Peer::Channel(c) => {
             let input_channel = tl::enums::InputChannel::Channel(tl::types::InputChannel {
@@ -737,25 +964,31 @@ pub async fn cmd_remove_team_member(
                 until_date: 0,
             });
 
-            client.invoke(&tl::functions::channels::EditBanned {
-                channel: input_channel,
-                participant: input_peer,
-                banned_rights,
-            }).await.map_err(|e| format!("Failed to remove member: {}", e))?;
-        },
+            client
+                .invoke(&tl::functions::channels::EditBanned {
+                    channel: input_channel,
+                    participant: input_peer,
+                    banned_rights,
+                })
+                .await
+                .map_err(|e| format!("Failed to remove member: {}", e))?;
+        }
         Peer::Group(g) => {
-            client.invoke(&tl::functions::messages::DeleteChatUser {
-                chat_id: g.raw.id(),
-                user_id: tl::enums::InputUser::User(tl::types::InputUser {
-                    user_id,
-                    access_hash,
-                }),
-                revoke_history: false,
-            }).await.map_err(|e| format!("Failed to remove member: {}", e))?;
-        },
+            client
+                .invoke(&tl::functions::messages::DeleteChatUser {
+                    chat_id: g.raw.id(),
+                    user_id: tl::enums::InputUser::User(tl::types::InputUser {
+                        user_id,
+                        access_hash,
+                    }),
+                    revoke_history: false,
+                })
+                .await
+                .map_err(|e| format!("Failed to remove member: {}", e))?;
+        }
         _ => return Err("Invalid peer type".to_string()),
     }
-    
+
     log::info!("Removed user {} from team {}", user_id, team_id);
     Ok(true)
 }
@@ -767,7 +1000,10 @@ pub async fn cmd_set_member_role(
     role: String,
     _state: State<'_, TelegramState>,
 ) -> Result<bool, String> {
-    Err(format!("Role management not implemented. Requested role: {}", role))
+    Err(format!(
+        "Role management not implemented. Requested role: {}",
+        role
+    ))
 }
 
 #[tauri::command]
@@ -778,24 +1014,37 @@ pub async fn cmd_create_team(
 ) -> Result<TeamInfo, String> {
     let client_opt = state.client.lock().await.clone();
     if client_opt.is_none() {
-        return Ok(TeamInfo { id: 999, name, username: None, member_count: 0, is_channel: false, is_supergroup: true, top_members: Vec::new(), unread_count: 0, photo_url: None });
+        return Ok(TeamInfo {
+            id: 999,
+            name,
+            username: None,
+            member_count: 0,
+            is_channel: false,
+            is_supergroup: true,
+            top_members: Vec::new(),
+            unread_count: 0,
+            photo_url: None,
+        });
     }
     let client = client_opt.unwrap();
-    
+
     log::info!("Creating supergroup: {}", name);
-    
-    let result = client.invoke(&tl::functions::channels::CreateChannel {
-        broadcast: false,
-        megagroup: true,
-        title: name.clone(),
-        about: "".to_string(),
-        geo_point: None,
-        address: None,
-        for_import: false,
-        forum: false,
-        ttl_period: None,
-    }).await.map_err(|e| format!("Failed to create team: {}", e))?;
-    
+
+    let result = client
+        .invoke(&tl::functions::channels::CreateChannel {
+            broadcast: false,
+            megagroup: true,
+            title: name.clone(),
+            about: "".to_string(),
+            geo_point: None,
+            address: None,
+            for_import: false,
+            forum: false,
+            ttl_period: None,
+        })
+        .await
+        .map_err(|e| format!("Failed to create team: {}", e))?;
+
     let (id, username) = match result {
         tl::enums::Updates::Updates(u) => {
             let chat = u.chats.first().ok_or("No chat in updates")?;
@@ -803,10 +1052,10 @@ pub async fn cmd_create_team(
                 tl::enums::Chat::Channel(c) => (c.id, c.username.clone()),
                 _ => return Err("Created chat is not a channel".to_string()),
             }
-        },
+        }
         _ => return Err("Unexpected response".to_string()),
     };
-    
+
     log::info!("Created team: {} (ID: {})", name, id);
     Ok(TeamInfo {
         id,
@@ -831,30 +1080,36 @@ pub async fn cmd_delete_team(
         return Ok(false);
     }
     let client = client_opt.unwrap();
-    
+
     log::info!("Deleting team {}", team_id);
-    
+
     let peer = resolve_peer(&client, Some(team_id), &state.peer_cache).await?;
-    
+
     match &peer {
         Peer::Channel(c) => {
             let input_channel = tl::enums::InputChannel::Channel(tl::types::InputChannel {
                 channel_id: c.raw.id,
                 access_hash: c.raw.access_hash.ok_or("No access hash")?,
             });
-            
-            client.invoke(&tl::functions::channels::DeleteChannel {
-                channel: input_channel,
-            }).await.map_err(|e| format!("Failed to delete team: {}", e))?;
-        },
+
+            client
+                .invoke(&tl::functions::channels::DeleteChannel {
+                    channel: input_channel,
+                })
+                .await
+                .map_err(|e| format!("Failed to delete team: {}", e))?;
+        }
         Peer::Group(g) => {
-            client.invoke(&tl::functions::messages::DeleteChat {
-                chat_id: g.raw.id(),
-            }).await.map_err(|e| format!("Failed to delete team: {}", e))?;
-        },
+            client
+                .invoke(&tl::functions::messages::DeleteChat {
+                    chat_id: g.raw.id(),
+                })
+                .await
+                .map_err(|e| format!("Failed to delete team: {}", e))?;
+        }
         _ => return Err("Invalid peer type".to_string()),
     }
-    
+
     log::info!("Deleted team {}", team_id);
     Ok(true)
 }
@@ -871,36 +1126,42 @@ pub async fn cmd_edit_team(
         return Ok(false);
     }
     let client = client_opt.unwrap();
-    
+
     log::info!("Editing team {} with name {:?}", team_id, new_name);
-    
+
     let peer = resolve_peer(&client, Some(team_id), &state.peer_cache).await?;
-    
+
     match &peer {
         Peer::Channel(c) => {
             let input_channel = tl::enums::InputChannel::Channel(tl::types::InputChannel {
                 channel_id: c.raw.id,
                 access_hash: c.raw.access_hash.ok_or("No access hash")?,
             });
-            
+
             if let Some(name) = new_name {
-                client.invoke(&tl::functions::channels::EditTitle {
-                    channel: input_channel,
-                    title: name,
-                }).await.map_err(|e| format!("Failed to rename team: {}", e))?;
+                client
+                    .invoke(&tl::functions::channels::EditTitle {
+                        channel: input_channel,
+                        title: name,
+                    })
+                    .await
+                    .map_err(|e| format!("Failed to rename team: {}", e))?;
             }
-        },
+        }
         Peer::Group(g) => {
             if let Some(name) = new_name {
-                client.invoke(&tl::functions::messages::EditChatTitle {
-                    chat_id: g.raw.id(),
-                    title: name,
-                }).await.map_err(|e| format!("Failed to rename team: {}", e))?;
+                client
+                    .invoke(&tl::functions::messages::EditChatTitle {
+                        chat_id: g.raw.id(),
+                        title: name,
+                    })
+                    .await
+                    .map_err(|e| format!("Failed to rename team: {}", e))?;
             }
-        },
+        }
         _ => return Err("Invalid peer type".to_string()),
     }
-    
+
     log::info!("Edited team {}", team_id);
     Ok(true)
 }
@@ -909,69 +1170,87 @@ pub async fn cmd_edit_team(
 pub async fn cmd_get_team_messages(
     team_id: Option<i64>,
     limit: Option<i32>,
+    before_message_id: Option<i32>,
     state: State<'_, TelegramState>,
-) -> Result<Vec<ChatMessage>, String> {
-    use std::time::{Duration, SystemTime, UNIX_EPOCH};
-
+) -> Result<MessagesResponse, String> {
     let client_opt = state.client.lock().await.clone();
     if client_opt.is_none() {
-        return Ok(Vec::new());
+        return Ok(MessagesResponse {
+            messages: Vec::new(),
+            next_before_message_id: None,
+            has_more: false,
+        });
     }
     let client = client_opt.unwrap();
-    
-    log::info!("Fetching messages for peer: {:?}", team_id);
-    
+
+    log::info!(
+        "Fetching messages for peer: {:?}, before_message_id: {:?}",
+        team_id,
+        before_message_id
+    );
+
     let peer = resolve_peer(&client, team_id, &state.peer_cache).await?;
-    
-    let msg_limit = limit.unwrap_or(1000) as usize;
+
+    let msg_limit = limit.unwrap_or(50).clamp(1, 100) as usize;
+    let fetch_limit = msg_limit + 1;
     let mut messages = Vec::new();
-    let mut iter = client.iter_messages(&peer);
-    let day_ago = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or(Duration::from_secs(0))
-        .saturating_sub(Duration::from_secs(24 * 60 * 60));
+    let mut iter = match before_message_id {
+        Some(id) if id > 0 => client.iter_messages(&peer).offset_id(id).limit(fetch_limit),
+        _ => client.iter_messages(&peer).limit(fetch_limit),
+    };
+    let mut has_more = false;
 
-    let mut count = 0;
     while let Some(msg) = iter.next().await.map_err(|e| e.to_string())? {
-        if count >= msg_limit {
-            break;
-        }
-
-        let msg_timestamp = SystemTime::from(msg.date())
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or(Duration::from_secs(0))
-            .as_secs();
-
-        if msg_timestamp < day_ago.as_secs() {
+        if messages.len() >= msg_limit {
+            has_more = true;
             break;
         }
 
         let (sender_name, sender_photo_url) = match msg.sender() {
             Some(Peer::User(u)) => {
-                let first = if let Some(f) = u.first_name() { f.to_string() } else { "Unknown".to_string() };
+                let first = if let Some(f) = u.first_name() {
+                    f.to_string()
+                } else {
+                    "Unknown".to_string()
+                };
                 let full_name = if let Some(l) = u.last_name() {
                     format!("{} {}", first, l)
                 } else {
                     first
                 };
-                let photo = if user_has_photo(&u.raw) { Some("present".to_string()) } else { None };
+                let photo = if user_has_photo(&u.raw) {
+                    Some("present".to_string())
+                } else {
+                    None
+                };
                 (full_name, photo)
-            },
+            }
             _ => ("Unknown".to_string(), None),
         };
         let sender_id = match msg.sender() {
             Some(Peer::User(u)) => u.raw.id() as i64,
             _ => 0,
         };
-        
+
         let media = msg.media();
         let text = msg.text().to_string();
-        
+
         let (has_media, media_type, media_name, media_size, mime_type, display_text) = match media {
             Some(grammers_client::types::Media::Photo(_)) => {
-                let display = if !text.is_empty() { text } else { "[Photo]".to_string() };
-                (true, "photo".to_string(), "Photo".to_string(), 0, "image/jpeg".to_string(), display)
-            },
+                let display = if !text.is_empty() {
+                    text
+                } else {
+                    "[Photo]".to_string()
+                };
+                (
+                    true,
+                    "photo".to_string(),
+                    "Photo".to_string(),
+                    0,
+                    "image/jpeg".to_string(),
+                    display,
+                )
+            }
             Some(grammers_client::types::Media::Document(d)) => {
                 let name = d.name();
                 let size = d.size() as i64;
@@ -981,30 +1260,50 @@ pub async fn cmd_get_team_messages(
                     .and_then(|e| e.to_str())
                     .map(|s| s.to_lowercase())
                     .unwrap_or_default();
-                
-                let file_type = if ["jpg", "jpeg", "png", "gif", "webp", "bmp", "svg"].contains(&ext.as_str()) {
+
+                let file_type = if ["jpg", "jpeg", "png", "gif", "webp", "bmp", "svg"]
+                    .contains(&ext.as_str())
+                {
                     "image"
                 } else if ["mp4", "avi", "mov", "mkv", "webm"].contains(&ext.as_str()) {
                     "video"
                 } else if ["mp3", "wav", "ogg", "flac", "aac", "m4a"].contains(&ext.as_str()) {
                     "audio"
-                } else if ["pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "txt"].contains(&ext.as_str()) {
+                } else if ["pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "txt"]
+                    .contains(&ext.as_str())
+                {
                     "document"
                 } else {
                     "file"
-                }.to_string();
-                
-                let display = if !text.is_empty() { text } else { name.to_string() };
+                }
+                .to_string();
+
+                let display = if !text.is_empty() {
+                    text
+                } else {
+                    name.to_string()
+                };
                 (true, file_type, name.to_string(), size, mime, display)
-            },
+            }
             _ => {
-                let display = if !text.is_empty() { text } else { "[No text]".to_string() };
-                (false, "none".to_string(), "".to_string(), 0, "".to_string(), display)
+                let display = if !text.is_empty() {
+                    text
+                } else {
+                    "[No text]".to_string()
+                };
+                (
+                    false,
+                    "none".to_string(),
+                    "".to_string(),
+                    0,
+                    "".to_string(),
+                    display,
+                )
             }
         };
-        
+
         let date_str = msg.date().format("%Y-%m-%d %H:%M:%S").to_string();
-        
+
         messages.push(ChatMessage {
             id: msg.id(),
             sender_id,
@@ -1020,12 +1319,25 @@ pub async fn cmd_get_team_messages(
             outgoing: msg.outgoing(),
             pinned: msg.pinned(),
         });
-        
-        count += 1;
     }
-    
-    log::info!("Found {} messages for peer {:?}", messages.len(), team_id);
-    Ok(messages)
+
+    let next_before_message_id = if has_more {
+        messages.last().map(|message| message.id)
+    } else {
+        None
+    };
+
+    log::info!(
+        "Found {} messages for peer {:?} (has_more: {})",
+        messages.len(),
+        team_id,
+        has_more
+    );
+    Ok(MessagesResponse {
+        messages,
+        next_before_message_id,
+        has_more,
+    })
 }
 
 #[tauri::command]
@@ -1039,12 +1351,15 @@ pub async fn cmd_send_team_message(
         return Ok(false);
     }
     let client = client_opt.unwrap();
-    
+
     let peer = resolve_peer(&client, team_id, &state.peer_cache).await?;
     let message_obj = grammers_client::InputMessage::new().text(message);
-    
-    client.send_message(&peer, message_obj).await.map_err(|e| format!("Failed to send message: {}", e))?;
-    
+
+    client
+        .send_message(&peer, message_obj)
+        .await
+        .map_err(|e| format!("Failed to send message: {}", e))?;
+
     Ok(true)
 }
 
@@ -1061,8 +1376,12 @@ pub async fn cmd_send_team_file(
     }
     let client = client_opt.unwrap();
 
-    let metadata = tokio::fs::metadata(&path).await.map_err(|e| e.to_string())?;
-    let mut file = tokio::fs::File::open(&path).await.map_err(|e| e.to_string())?;
+    let metadata = tokio::fs::metadata(&path)
+        .await
+        .map_err(|e| e.to_string())?;
+    let mut file = tokio::fs::File::open(&path)
+        .await
+        .map_err(|e| e.to_string())?;
     let file_name = std::path::Path::new(&path)
         .file_name()
         .map(|name| name.to_string_lossy().to_string())
@@ -1077,7 +1396,10 @@ pub async fn cmd_send_team_file(
         .text(caption.unwrap_or_default())
         .file(uploaded);
 
-    client.send_message(&peer, message).await.map_err(map_error)?;
+    client
+        .send_message(&peer, message)
+        .await
+        .map_err(map_error)?;
 
     Ok(true)
 }
@@ -1090,27 +1412,34 @@ pub async fn cmd_download_team_media(
     state: State<'_, TelegramState>,
 ) -> Result<String, String> {
     use grammers_client::types::Media;
-    
+
     let client_opt = state.client.lock().await.clone();
     if client_opt.is_none() {
         return Err("Not logged in".to_string());
     }
     let client = client_opt.unwrap();
-    
+
     let peer = resolve_peer(&client, team_id, &state.peer_cache).await?;
-    
-    let messages = client.get_messages_by_id(&peer, &[message_id]).await.map_err(|e| e.to_string())?;
-    
-    let msg = messages.into_iter().flatten().next().ok_or("Message not found")?;
-    
+
+    let messages = client
+        .get_messages_by_id(&peer, &[message_id])
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let msg = messages
+        .into_iter()
+        .flatten()
+        .next()
+        .ok_or("Message not found")?;
+
     let media = msg.media().ok_or("No media in message")?;
-    
+
     match media {
         Media::Photo(_) => {
             std::fs::File::create(&save_path).map_err(|e| e.to_string())?;
             log::info!("[MOCK] Saved photo to {}", save_path);
             Ok("Photo saved".to_string())
-        },
+        }
         Media::Document(ref d) => {
             let name = d.name();
             let ext = std::path::Path::new(&name)
@@ -1122,18 +1451,18 @@ pub async fn cmd_download_team_media(
             } else {
                 format!("{}.{}", save_path, ext)
             };
-            
+
             let mut download_iter = client.iter_download(&media);
             let mut file = std::fs::File::create(&final_path).map_err(|e| e.to_string())?;
-            
+
             while let Some(chunk) = download_iter.next().await.transpose() {
                 let bytes = chunk.map_err(|e| e.to_string())?;
                 std::io::Write::write_all(&mut file, &bytes).map_err(|e| e.to_string())?;
             }
-            
+
             log::info!("Downloaded file to {}", final_path);
             Ok(final_path)
-        },
+        }
         _ => Err("Unsupported media type".to_string()),
     }
 }
@@ -1151,7 +1480,10 @@ pub async fn cmd_pin_team_message(
     let client = client_opt.unwrap();
     let peer = resolve_peer(&client, team_id, &state.peer_cache).await?;
 
-    client.pin_message(&peer, message_id).await.map_err(|e| format!("Failed to pin message: {}", e))?;
+    client
+        .pin_message(&peer, message_id)
+        .await
+        .map_err(|e| format!("Failed to pin message: {}", e))?;
 
     Ok(true)
 }

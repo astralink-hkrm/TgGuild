@@ -1,15 +1,15 @@
 pub mod models;
 
-pub mod commands;
 pub mod bandwidth;
+pub mod commands;
 
+use commands::streaming::StreamConfig;
+use commands::TelegramState;
+use rand::Rng;
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 use tauri::Manager;
 use tokio::sync::Mutex;
-use std::sync::Arc;
-use std::collections::{HashMap, HashSet};
-use commands::TelegramState;
-use commands::streaming::StreamConfig;
-use rand::Rng;
 
 pub mod server;
 
@@ -61,9 +61,12 @@ pub fn run() {
                 cancelled_transfers: Arc::new(tokio::sync::RwLock::new(HashSet::new())),
             });
             app.manage(bandwidth::BandwidthManager::new(app.handle()));
-            app.manage(StreamConfig { token: stream_token.clone(), port: STREAM_PORT });
+            app.manage(StreamConfig {
+                token: stream_token.clone(),
+                port: STREAM_PORT,
+            });
             app.manage(ActixServerHandle(server_handle_for_setup.clone()));
-            
+
             // Start Streaming Server on dedicated thread (Actix needs its own runtime)
             let state = Arc::new(app.state::<TelegramState>().inner().clone());
             let token_for_server = stream_token.clone();
@@ -82,7 +85,7 @@ pub fn run() {
                     }
                 });
             });
-            
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -120,6 +123,7 @@ pub fn run() {
             commands::cmd_get_teams,
             commands::cmd_get_current_user,
             commands::cmd_get_direct_chats,
+            commands::cmd_get_contacts,
             commands::cmd_get_team_members,
             commands::cmd_create_team,
             commands::cmd_delete_team,

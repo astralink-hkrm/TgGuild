@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Folder, Eye, HardDrive, Plus } from 'lucide-react';
 import { TelegramFile } from '../../types';
+import { formatDisplayDate } from '../../utils';
 import { FileTypeIcon } from '../FileTypeIcon';
 
 interface FileListItemProps {
@@ -77,7 +78,7 @@ export function FileListItem({
                 </div>
             </div>
             <div className="text-right text-xs text-telegram-subtext truncate">{file.sizeStr}</div>
-            <div className="text-right text-xs text-telegram-subtext font-mono opacity-50 truncate">{file.created_at || '-'}</div>
+            <div className="text-right text-xs text-telegram-subtext opacity-70 truncate">{formatDisplayDate(file.created_at)}</div>
         </div>
     );
 }

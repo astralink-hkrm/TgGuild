@@ -13,6 +13,7 @@ import {
     TEAM_VISIBILITY_CHANGED_EVENT,
     TeamVisibilitySettings,
 } from './teamVisibility';
+import { readTelegramDirectoryCache, saveTelegramDirectoryCache } from './telegramCache';
 
 interface TeamInfo {
     id: number;
@@ -56,6 +57,12 @@ export function TeamsPanel({ onGroupCreated }: TeamsPanelProps) {
     const [members, setMembers] = useState<TeamMember[]>([]);
     const [selectedChat, setSelectedChat] = useState<SelectedChat | null>(null);
     const [loading, setLoading] = useState(true);
+    const [teamsLoadingMore, setTeamsLoadingMore] = useState(false);
+    const [contactsLoadingMore, setContactsLoadingMore] = useState(false);
+    const [teamsBeforeDate, setTeamsBeforeDate] = useState<number | null>(null);
+    const [contactsBeforeDate, setContactsBeforeDate] = useState<number | null>(null);
+    const [teamsHasMore, setTeamsHasMore] = useState(false);
+    const [contactsHasMore, setContactsHasMore] = useState(false);
     const [membersLoading, setMembersLoading] = useState(false);
     const [searchTerm, setSearchTerm] = useState('');
     const [streamToken, setStreamToken] = useState('');
@@ -117,19 +124,52 @@ export function TeamsPanel({ onGroupCreated }: TeamsPanelProps) {
     const loadInitialData = async () => {
         try {
             setLoading(true);
-            const [teamResult, contactResult, userResult, token] = await Promise.all([
-                invoke<TeamInfo[]>('cmd_get_teams'),
-                invoke<TeamMember[]>('cmd_get_direct_chats'),
+            const [userResult, token] = await Promise.all([
                 invoke<CurrentTelegramUser | null>('cmd_get_current_user'),
                 invoke<string>('cmd_get_stream_token'),
             ]);
-            setTeams(teamResult);
-            setContacts(contactResult);
-            setCurrentUserId(userResult?.user_id || null);
+            const userId = userResult?.user_id || null;
+            setCurrentUserId(userId);
             setStreamToken(token);
-            const visibleTeam = teamResult.find(team => isTeamVisible(team.id, teamVisibility));
-            if (!selectedChat && visibleTeam) {
+
+            const cached = readTelegramDirectoryCache<TeamInfo, TeamMember>(userId);
+            let selectedFromCache = false;
+            if (cached) {
+                setTeams(cached.teams);
+                setContacts(cached.contacts);
+                setTeamsBeforeDate(null);
+                setContactsBeforeDate(null);
+                setTeamsHasMore(false);
+                setContactsHasMore(false);
+                const visibleTeam = cached.teams.find(team => isTeamVisible(team.id, teamVisibility));
+                const visibleContact = cached.contacts.find(contact => isContactVisible(contact.user_id, teamVisibility));
+                if (!selectedChat && visibleTeam) {
+                    selectedFromCache = true;
+                    selectGroup(visibleTeam);
+                } else if (!selectedChat && visibleContact) {
+                    selectedFromCache = true;
+                    selectContact(visibleContact);
+                }
+                setLoading(false);
+            }
+
+            const [teamResp, contactResp] = await Promise.all([
+                invoke<{ teams: TeamInfo[]; next_before_date: number | null; has_more: boolean }>('cmd_get_teams'),
+                invoke<{ chats: TeamMember[]; next_before_date: number | null; has_more: boolean }>('cmd_get_direct_chats'),
+            ]);
+            setTeams(teamResp.teams);
+            setContacts(contactResp.chats);
+            setTeamsBeforeDate(teamResp.next_before_date);
+            setContactsBeforeDate(contactResp.next_before_date);
+            setTeamsHasMore(teamResp.has_more);
+            setContactsHasMore(contactResp.has_more);
+            saveTelegramDirectoryCache(userId, teamResp.teams, contactResp.chats);
+            const visibleTeam = teamResp.teams.find(team => isTeamVisible(team.id, teamVisibility));
+            const visibleContact = contactResp.chats.find(contact => isContactVisible(contact.user_id, teamVisibility));
+            if (!selectedChat && !selectedFromCache && visibleTeam) {
                 selectGroup(visibleTeam);
+            } else if (!selectedChat && !selectedFromCache && visibleContact) {
+                selectContact(visibleContact);
             }
         } catch (e) {
             toast.error(`Failed to load teams: ${e}`);
@@ -139,9 +179,42 @@ export function TeamsPanel({ onGroupCreated }: TeamsPanelProps) {
     };
 
     const loadTeams = async () => {
-        const result = await invoke<TeamInfo[]>('cmd_get_teams');
-        setTeams(result);
-        return result;
+        const resp = await invoke<{ teams: TeamInfo[]; next_before_date: number | null; has_more: boolean }>('cmd_get_teams');
+        setTeams(resp.teams);
+        setTeamsBeforeDate(resp.next_before_date);
+        setTeamsHasMore(resp.has_more);
+        saveTelegramDirectoryCache(currentUserId, resp.teams, contacts);
+        return resp.teams;
+    };
+
+    const loadMoreTeams = async () => {
+        if (!teamsHasMore || teamsLoadingMore) return;
+        try {
+            setTeamsLoadingMore(true);
+            const resp = await invoke<{ teams: TeamInfo[]; next_before_date: number | null; has_more: boolean }>('cmd_get_teams', { beforeDate: teamsBeforeDate });
+            setTeams(prev => [...prev, ...resp.teams]);
+            setTeamsBeforeDate(resp.next_before_date);
+            setTeamsHasMore(resp.has_more);
+        } catch (e) {
+            toast.error(`Failed to load more teams: ${e}`);
+        } finally {
+            setTeamsLoadingMore(false);
+        }
+    };
+
+    const loadMoreContacts = async () => {
+        if (!contactsHasMore || contactsLoadingMore) return;
+        try {
+            setContactsLoadingMore(true);
+            const resp = await invoke<{ chats: TeamMember[]; next_before_date: number | null; has_more: boolean }>('cmd_get_direct_chats', { beforeDate: contactsBeforeDate });
+            setContacts(prev => [...prev, ...resp.chats]);
+            setContactsBeforeDate(resp.next_before_date);
+            setContactsHasMore(resp.has_more);
+        } catch (e) {
+            toast.error(`Failed to load more contacts: ${e}`);
+        } finally {
+            setContactsLoadingMore(false);
+        }
     };
 
     const loadMembers = async (teamId: number) => {
@@ -309,6 +382,15 @@ export function TeamsPanel({ onGroupCreated }: TeamsPanelProps) {
                             </button>
                         ))
                     )}
+                    {teamsHasMore && (
+                        <button
+                            onClick={loadMoreTeams}
+                            disabled={teamsLoadingMore}
+                            className="w-full flex items-center justify-center gap-2 rounded-xl px-3 py-2.5 text-sm font-medium text-telegram-primary hover:bg-telegram-primary/10 transition-colors disabled:opacity-50"
+                        >
+                            {teamsLoadingMore ? 'Loading...' : 'Load More Groups'}
+                        </button>
+                    )}
 
                     <SectionLabel label="Direct Messages" />
                     {filteredContacts.map(contact => (
@@ -330,6 +412,15 @@ export function TeamsPanel({ onGroupCreated }: TeamsPanelProps) {
                             </div>
                         </button>
                     ))}
+                    {contactsHasMore && (
+                        <button
+                            onClick={loadMoreContacts}
+                            disabled={contactsLoadingMore}
+                            className="w-full flex items-center justify-center gap-2 rounded-xl px-3 py-2.5 text-sm font-medium text-telegram-primary hover:bg-telegram-primary/10 transition-colors disabled:opacity-50"
+                        >
+                            {contactsLoadingMore ? 'Loading...' : 'Load More Contacts'}
+                        </button>
+                    )}
                 </div>
             </aside>
 

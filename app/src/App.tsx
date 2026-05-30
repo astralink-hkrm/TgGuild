@@ -15,17 +15,6 @@ import { DropZoneProvider } from "./contexts/DropZoneContext";
 
 const queryClient = new QueryClient();
 
-function TitleBar() {
-  return (
-    <div data-tauri-drag-region className="h-10 bg-telegram-surface/90 backdrop-blur-md flex items-center justify-between px-4 select-none fixed top-0 left-0 right-0 z-[100]">
-      <div className="flex items-center gap-2 pointer-events-none">
-        <img src="/logo.png" alt="" className="w-5 h-5 rounded-full" />
-        <span className="text-xs font-semibold text-telegram-text/70 uppercase tracking-widest">TgGuild</span>
-      </div>
-    </div>
-  );
-}
-
 function LoadingScreen() {
   return (
     <div className="h-screen w-screen auth-gradient flex flex-col items-center justify-center relative overflow-hidden">

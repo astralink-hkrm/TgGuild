@@ -49,12 +49,12 @@ export function ShareFilesModal({ folders, selectedCount, onClose, onShare }: Sh
 
     useEffect(() => {
         Promise.all([
-            invoke<TeamInfo[]>('cmd_get_teams').catch(() => []),
-            invoke<DirectChatInfo[]>('cmd_get_direct_chats').catch(() => []),
+            invoke<{ teams: TeamInfo[] }>('cmd_get_teams').catch(() => ({ teams: [] })),
+            invoke<{ chats: DirectChatInfo[] }>('cmd_get_direct_chats').catch(() => ({ chats: [] })),
             invoke<string>('cmd_get_stream_token').catch(() => ''),
-        ]).then(([teamResult, directResult, token]) => {
-            setTeams(teamResult);
-            setDirectChats(directResult);
+        ]).then(([teamResp, directResp, token]) => {
+            setTeams(teamResp.teams);
+            setDirectChats(directResp.chats);
             setStreamToken(token);
         });
     }, []);

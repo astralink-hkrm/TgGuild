@@ -61,8 +61,8 @@ export function Dashboard({ onLogout }: { onLogout: () => void }) {
 
     const loadGroups = async () => {
         try {
-            const result = await invoke<{id: number, name: string, username: string | null, member_count: number, photo_url?: string | null}[]>('cmd_get_teams');
-            setGroups(result);
+            const resp = await invoke<{ teams: {id: number, name: string, username: string | null, member_count: number, photo_url?: string | null}[] }>('cmd_get_teams');
+            setGroups(resp.teams);
         } catch (e) {
             console.error('Failed to load groups:', e);
         }

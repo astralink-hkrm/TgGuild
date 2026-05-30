@@ -1,11 +1,12 @@
-use tauri::{State, Emitter};
+use crate::bandwidth::BandwidthManager;
+use crate::commands::utils::{map_error, resolve_peer};
+use crate::models::{FileMetadata, FolderMetadata, FolderTreeNode};
+use crate::TelegramState;
 use grammers_client::types::{Media, Peer};
 use grammers_client::InputMessage;
 use grammers_tl_types as tl;
-use crate::TelegramState;
-use crate::models::{FolderMetadata, FileMetadata, FolderTreeNode};
-use crate::bandwidth::BandwidthManager;
-use crate::commands::utils::{resolve_peer, map_error};
+use std::collections::HashSet;
+use tauri::{Emitter, State};
 
 const VIRTUAL_FOLDER_PREFIX: &str = "TGGuild_FOLDER_V1:";
 const VIRTUAL_FILE_PREFIX: &str = "TGGuild_FILE_V1:";
@@ -15,20 +16,12 @@ fn parse_virtual_folder_meta(text: &str) -> Option<(String, Option<i64>, Option<
     let json = text.strip_prefix(VIRTUAL_FOLDER_PREFIX)?;
     let value: serde_json::Value = serde_json::from_str(json).ok()?;
     let name = value.get("name")?.as_str()?.to_string();
-    let parent_id = value.get("parent_id").and_then(|v| {
-        if v.is_null() {
-            None
-        } else {
-            v.as_i64()
-        }
-    });
-    let current_id = value.get("current_id").and_then(|v| {
-        if v.is_null() {
-            None
-        } else {
-            v.as_i64()
-        }
-    });
+    let parent_id = value
+        .get("parent_id")
+        .and_then(|v| if v.is_null() { None } else { v.as_i64() });
+    let current_id = value
+        .get("current_id")
+        .and_then(|v| if v.is_null() { None } else { v.as_i64() });
     Some((name, parent_id, current_id))
 }
 
@@ -45,20 +38,12 @@ fn parse_virtual_file_meta(text: &str) -> Option<(String, Option<i64>, Option<i6
     let mut lines = json.lines();
     let value: serde_json::Value = serde_json::from_str(lines.next()?).ok()?;
     let name = value.get("name")?.as_str()?.to_string();
-    let parent_id = value.get("parent_id").and_then(|v| {
-        if v.is_null() {
-            None
-        } else {
-            v.as_i64()
-        }
-    });
-    let current_id = value.get("current_id").and_then(|v| {
-        if v.is_null() {
-            None
-        } else {
-            v.as_i64()
-        }
-    });
+    let parent_id = value
+        .get("parent_id")
+        .and_then(|v| if v.is_null() { None } else { v.as_i64() });
+    let current_id = value
+        .get("current_id")
+        .and_then(|v| if v.is_null() { None } else { v.as_i64() });
     Some((name, parent_id, current_id))
 }
 
@@ -76,13 +61,33 @@ fn parse_tree(text: &str) -> Option<Vec<FolderTreeNode>> {
 }
 
 fn tree_meta_text(tree: &[FolderTreeNode]) -> String {
-    format!("{}{}", TREE_PREFIX, serde_json::to_string(tree).unwrap_or_default())
+    format!(
+        "{}{}",
+        TREE_PREFIX,
+        serde_json::to_string(tree).unwrap_or_default()
+    )
 }
 
 struct FolderEntry {
     id: i64,
     name: String,
     parent_id: Option<i64>,
+}
+
+fn clean_drive_channel_name(name: &str) -> String {
+    let display_name = name
+        .replace(" [TD]", "")
+        .replace(" [td]", "")
+        .replace("[TD]", "")
+        .replace("[td]", "")
+        .trim()
+        .to_string();
+
+    if display_name.is_empty() {
+        name.to_string()
+    } else {
+        display_name
+    }
 }
 
 fn next_folder_id(tree: &[FolderTreeNode]) -> i64 {
@@ -104,7 +109,10 @@ fn tree_contains(tree: &[FolderTreeNode], id: i64) -> bool {
     false
 }
 
-async fn read_tree(client: &grammers_client::Client, peer: &Peer) -> Result<Option<Vec<FolderTreeNode>>, String> {
+async fn read_tree(
+    client: &grammers_client::Client,
+    peer: &Peer,
+) -> Result<Option<Vec<FolderTreeNode>>, String> {
     let mut msgs = client.iter_messages(peer);
     while let Some(msg) = msgs.next().await.map_err(|e| e.to_string())? {
         if msg.pinned() {
@@ -116,7 +124,11 @@ async fn read_tree(client: &grammers_client::Client, peer: &Peer) -> Result<Opti
     Ok(None)
 }
 
-async fn write_tree(client: &grammers_client::Client, peer: &Peer, tree: &[FolderTreeNode]) -> Result<(), String> {
+async fn write_tree(
+    client: &grammers_client::Client,
+    peer: &Peer,
+    tree: &[FolderTreeNode],
+) -> Result<(), String> {
     let text = tree_meta_text(tree);
     let mut msgs = client.iter_messages(peer);
     while let Some(msg) = msgs.next().await.map_err(|e| e.to_string())? {
@@ -127,34 +139,49 @@ async fn write_tree(client: &grammers_client::Client, peer: &Peer, tree: &[Folde
                     access_hash: c.raw.access_hash.unwrap_or(0),
                 }),
                 Peer::User(_) => tl::enums::InputPeer::PeerSelf,
-                Peer::Group(_) => return Err("Groups are not supported for file operations.".to_string()),
+                Peer::Group(_) => {
+                    return Err("Groups are not supported for file operations.".to_string())
+                }
             };
-            client.invoke(&tl::functions::messages::EditMessage {
-                no_webpage: true,
-                peer: input_peer,
-                id: msg.id(),
-                message: Some(text),
-                media: None,
-                reply_markup: None,
-                entities: None,
-                schedule_date: None,
-                invert_media: false,
-                quick_reply_shortcut_id: None,
-                schedule_repeat_period: None,
-            }).await.map_err(|e| format!("Failed to update tree: {}", e))?;
+            client
+                .invoke(&tl::functions::messages::EditMessage {
+                    no_webpage: true,
+                    peer: input_peer,
+                    id: msg.id(),
+                    message: Some(text),
+                    media: None,
+                    reply_markup: None,
+                    entities: None,
+                    schedule_date: None,
+                    invert_media: false,
+                    quick_reply_shortcut_id: None,
+                    schedule_repeat_period: None,
+                })
+                .await
+                .map_err(|e| format!("Failed to update tree: {}", e))?;
             if !msg.pinned() {
-                client.pin_message(peer, msg.id()).await.map_err(|e| format!("Failed to pin tree: {}", e))?;
+                client
+                    .pin_message(peer, msg.id())
+                    .await
+                    .map_err(|e| format!("Failed to pin tree: {}", e))?;
             }
             return Ok(());
         }
     }
-    let sent = client.send_message(peer, InputMessage::new().text(text)).await.map_err(map_error)?;
-    client.pin_message(peer, sent.id()).await.map_err(|e| format!("Failed to pin tree: {}", e))?;
+    let sent = client
+        .send_message(peer, InputMessage::new().text(text))
+        .await
+        .map_err(map_error)?;
+    client
+        .pin_message(peer, sent.id())
+        .await
+        .map_err(|e| format!("Failed to pin tree: {}", e))?;
     Ok(())
 }
 
 fn build_tree_from_entries(entries: &[FolderEntry], parent_id: Option<i64>) -> Vec<FolderTreeNode> {
-    entries.iter()
+    entries
+        .iter()
         .filter(|e| e.parent_id == parent_id)
         .map(|e| FolderTreeNode {
             id: e.id,
@@ -177,7 +204,11 @@ fn remove_node_return(tree: &mut Vec<FolderTreeNode>, id: i64) -> Option<FolderT
     None
 }
 
-fn add_node_to_tree(tree: &mut Vec<FolderTreeNode>, parent_id: i64, new_node: FolderTreeNode) -> bool {
+fn add_node_to_tree(
+    tree: &mut Vec<FolderTreeNode>,
+    parent_id: i64,
+    new_node: FolderTreeNode,
+) -> bool {
     for node in tree.iter_mut() {
         if node.id == parent_id {
             node.children.push(new_node);
@@ -208,13 +239,14 @@ pub async fn cmd_create_folder(
     name: String,
     state: State<'_, TelegramState>,
 ) -> Result<FolderMetadata, String> {
-    let client_opt = {
-        state.client.lock().await.clone()
-    };
-    
+    let client_opt = { state.client.lock().await.clone() };
+
     // --- MOCK ---
     if client_opt.is_none() {
-        let mock_id = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64;
+        let mock_id = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
         log::info!("[MOCK] Created folder '{}' with ID {}", name, mock_id);
         return Ok(FolderMetadata {
             id: mock_id,
@@ -228,40 +260,48 @@ pub async fn cmd_create_folder(
     // -----------
     let client = client_opt.unwrap();
     log::info!("Creating Telegram Channel: {}", name);
-    
-    let result = client.invoke(&tl::functions::channels::CreateChannel {
-        broadcast: true,
-        megagroup: false,
-        title: format!("{} [TD]", name),
-        about: "TgGuild Storage Folder\n[tgguild-folder]".to_string(),
-        geo_point: None,
-        address: None,
-        for_import: false,
-        forum: false,
-        ttl_period: None, // Initial creation TTL
-    }).await.map_err(map_error)?;
-    
+
+    let result = client
+        .invoke(&tl::functions::channels::CreateChannel {
+            broadcast: true,
+            megagroup: false,
+            title: format!("{} [TD]", name),
+            about: "TgGuild Storage Folder\n[tgguild-folder]".to_string(),
+            geo_point: None,
+            address: None,
+            for_import: false,
+            forum: false,
+            ttl_period: None, // Initial creation TTL
+        })
+        .await
+        .map_err(map_error)?;
+
     let (chat_id, access_hash) = match result {
         tl::enums::Updates::Updates(u) => {
-             let chat = u.chats.first().ok_or("No chat in updates")?;
-             match chat {
-                 tl::enums::Chat::Channel(c) => (c.id, c.access_hash.unwrap_or(0)),
-                 _ => return Err("Created chat is not a channel".to_string()),
-             }
-        },
-        _ => return Err("Unexpected response (not Updates::Updates)".to_string()), 
+            let chat = u.chats.first().ok_or("No chat in updates")?;
+            match chat {
+                tl::enums::Chat::Channel(c) => (c.id, c.access_hash.unwrap_or(0)),
+                _ => return Err("Created chat is not a channel".to_string()),
+            }
+        }
+        _ => return Err("Unexpected response (not Updates::Updates)".to_string()),
     };
 
     // Explicitly Disable TTL
     let _input_channel = tl::enums::InputChannel::Channel(tl::types::InputChannel {
-         channel_id: chat_id,
-         access_hash,
+        channel_id: chat_id,
+        access_hash,
     });
 
-    let _ = client.invoke(&tl::functions::messages::SetHistoryTtl {
-        peer: tl::enums::InputPeer::Channel(tl::types::InputPeerChannel { channel_id: chat_id, access_hash }),
-        period: 0, 
-    }).await;
+    let _ = client
+        .invoke(&tl::functions::messages::SetHistoryTtl {
+            peer: tl::enums::InputPeer::Channel(tl::types::InputPeerChannel {
+                channel_id: chat_id,
+                access_hash,
+            }),
+            period: 0,
+        })
+        .await;
 
     Ok(FolderMetadata {
         id: chat_id,
@@ -278,10 +318,8 @@ pub async fn cmd_delete_folder(
     folder_id: i64,
     state: State<'_, TelegramState>,
 ) -> Result<bool, String> {
-    let client_opt = {
-        state.client.lock().await.clone()
-    };
-    
+    let client_opt = { state.client.lock().await.clone() };
+
     if client_opt.is_none() {
         log::info!("[MOCK] Deleted folder ID {}", folder_id);
         return Ok(true);
@@ -290,25 +328,27 @@ pub async fn cmd_delete_folder(
     log::info!("Deleting folder/channel: {}", folder_id);
 
     let peer = resolve_peer(&client, Some(folder_id), &state.peer_cache).await?;
-    
+
     let input_channel = match peer {
         Peer::Channel(c) => {
-             let chan = &c.raw;
-             tl::enums::InputChannel::Channel(tl::types::InputChannel {
-                 channel_id: chan.id,
-                 access_hash: chan.access_hash.ok_or("No access hash for channel")?,
-             })
-        },
+            let chan = &c.raw;
+            tl::enums::InputChannel::Channel(tl::types::InputChannel {
+                channel_id: chan.id,
+                access_hash: chan.access_hash.ok_or("No access hash for channel")?,
+            })
+        }
         _ => return Err("Only channels (folders) can be deleted.".to_string()),
     };
-    
-    client.invoke(&tl::functions::channels::DeleteChannel {
-        channel: input_channel,
-    }).await.map_err(|e| format!("Failed to delete channel: {}", e))?;
-    
+
+    client
+        .invoke(&tl::functions::channels::DeleteChannel {
+            channel: input_channel,
+        })
+        .await
+        .map_err(|e| format!("Failed to delete channel: {}", e))?;
+
     Ok(true)
 }
-
 
 #[derive(Clone, serde::Serialize)]
 struct ProgressPayload {
@@ -327,8 +367,12 @@ struct ProgressReader {
 }
 
 impl ProgressReader {
-    async fn new(path: &str) -> Result<(Self, u64, std::sync::Arc<std::sync::atomic::AtomicU64>), String> {
-        let file = tokio::fs::File::open(path).await.map_err(|e| e.to_string())?;
+    async fn new(
+        path: &str,
+    ) -> Result<(Self, u64, std::sync::Arc<std::sync::atomic::AtomicU64>), String> {
+        let file = tokio::fs::File::open(path)
+            .await
+            .map_err(|e| e.to_string())?;
         let metadata = file.metadata().await.map_err(|e| e.to_string())?;
         let size = metadata.len();
         let counter = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
@@ -351,7 +395,8 @@ impl tokio::io::AsyncRead for ProgressReader {
         if let std::task::Poll::Ready(Ok(())) = &result {
             let after = buf.filled().len();
             let delta = (after - before) as u64;
-            self.bytes_read.fetch_add(delta, std::sync::atomic::Ordering::Relaxed);
+            self.bytes_read
+                .fetch_add(delta, std::sync::atomic::Ordering::Relaxed);
         }
         result
     }
@@ -369,7 +414,12 @@ fn cleanup_partial_file(path: &str) {
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
                 Err(e) => {
-                    log::warn!("Cleanup attempt {}/5 failed for {}: {}", attempt + 1, path, e);
+                    log::warn!(
+                        "Cleanup attempt {}/5 failed for {}: {}",
+                        attempt + 1,
+                        path,
+                        e
+                    );
                     std::thread::sleep(std::time::Duration::from_secs(1));
                 }
             }
@@ -404,7 +454,12 @@ pub async fn cmd_upload_file(
 
     let client_opt = { state.client.lock().await.clone() };
     if client_opt.is_none() {
-        log::info!("[MOCK] Uploaded file {} to {:?}/{:?}", path, folder_id, virtual_folder_id);
+        log::info!(
+            "[MOCK] Uploaded file {} to {:?}/{:?}",
+            path,
+            folder_id,
+            virtual_folder_id
+        );
         bw_state.add_up(size);
         return Ok("Mock upload successful".to_string());
     }
@@ -412,9 +467,16 @@ pub async fn cmd_upload_file(
 
     // Emit start progress
     if !tid.is_empty() {
-        let _ = app_handle.emit("upload-progress", ProgressPayload {
-            id: tid.clone(), percent: 0, uploaded_bytes: 0, total_bytes: size, speed_bytes_per_sec: 0,
-        });
+        let _ = app_handle.emit(
+            "upload-progress",
+            ProgressPayload {
+                id: tid.clone(),
+                percent: 0,
+                uploaded_bytes: 0,
+                total_bytes: size,
+                speed_bytes_per_sec: 0,
+            },
+        );
     }
 
     // Create progress-tracking reader
@@ -438,19 +500,38 @@ pub async fn cmd_upload_file(
                 let current = progress_counter.load(std::sync::atomic::Ordering::Relaxed);
                 let now = std::time::Instant::now();
                 let dt = now.duration_since(last_time).as_secs_f64();
-                let speed = if dt > 0.0 { ((current - last_bytes) as f64 / dt) as u64 } else { 0 };
-                let percent = if file_size > 0 { ((current as f64 / file_size as f64) * 100.0).min(99.0) as u8 } else { 0 };
+                let speed = if dt > 0.0 {
+                    ((current - last_bytes) as f64 / dt) as u64
+                } else {
+                    0
+                };
+                let percent = if file_size > 0 {
+                    ((current as f64 / file_size as f64) * 100.0).min(99.0) as u8
+                } else {
+                    0
+                };
 
-                let _ = progress_handle.emit("upload-progress", ProgressPayload {
-                    id: progress_tid.clone(), percent, uploaded_bytes: current, total_bytes: file_size, speed_bytes_per_sec: speed,
-                });
+                let _ = progress_handle.emit(
+                    "upload-progress",
+                    ProgressPayload {
+                        id: progress_tid.clone(),
+                        percent,
+                        uploaded_bytes: current,
+                        total_bytes: file_size,
+                        speed_bytes_per_sec: speed,
+                    },
+                );
 
                 last_bytes = current;
                 last_time = now;
 
-                if current >= file_size { break; }
+                if current >= file_size {
+                    break;
+                }
                 // Check cancellation
-                if cancelled.read().await.contains(&progress_tid) { break; }
+                if cancelled.read().await.contains(&progress_tid) {
+                    break;
+                }
             }
         }))
     } else {
@@ -460,18 +541,26 @@ pub async fn cmd_upload_file(
     // Check cancellation before starting
     if state.cancelled_transfers.read().await.contains(&tid) {
         state.cancelled_transfers.write().await.remove(&tid);
-        if let Some(t) = progress_task { t.abort(); }
+        if let Some(t) = progress_task {
+            t.abort();
+        }
         return Err("Transfer cancelled".to_string());
     }
 
     let client_clone = client.clone();
     let upload_file_name = file_name.clone();
     let upload_result = tokio::spawn(async move {
-        client_clone.upload_stream(&mut reader, file_size as usize, upload_file_name).await
-    }).await.map_err(|e| format!("Task join error: {}", e))?;
+        client_clone
+            .upload_stream(&mut reader, file_size as usize, upload_file_name)
+            .await
+    })
+    .await
+    .map_err(|e| format!("Task join error: {}", e))?;
 
     // Stop progress reporter
-    if let Some(t) = progress_task { t.abort(); }
+    if let Some(t) = progress_task {
+        t.abort();
+    }
 
     // Check cancellation after upload
     if state.cancelled_transfers.read().await.contains(&tid) {
@@ -486,7 +575,10 @@ pub async fn cmd_upload_file(
 
     let peer = resolve_peer(&client, folder_id, &state.peer_cache).await?;
 
-    let sent = client.send_message(&peer, message).await.map_err(map_error)?;
+    let sent = client
+        .send_message(&peer, message)
+        .await
+        .map_err(map_error)?;
 
     let message_id = sent.id();
     let input_peer = match &peer {
@@ -498,27 +590,40 @@ pub async fn cmd_upload_file(
         Peer::Group(_) => return Err("Groups are not supported for file operations.".to_string()),
     };
 
-    let _ = client.invoke(&tl::functions::messages::EditMessage {
-        no_webpage: true,
-        peer: input_peer,
-        id: message_id,
-        message: Some(virtual_file_meta_text(&file_name, virtual_folder_id, Some(message_id as i64))),
-        media: None,
-        reply_markup: None,
-        entities: None,
-        schedule_date: None,
-        invert_media: false,
-        quick_reply_shortcut_id: None,
-        schedule_repeat_period: None,
-    }).await;
+    let _ = client
+        .invoke(&tl::functions::messages::EditMessage {
+            no_webpage: true,
+            peer: input_peer,
+            id: message_id,
+            message: Some(virtual_file_meta_text(
+                &file_name,
+                virtual_folder_id,
+                Some(message_id as i64),
+            )),
+            media: None,
+            reply_markup: None,
+            entities: None,
+            schedule_date: None,
+            invert_media: false,
+            quick_reply_shortcut_id: None,
+            schedule_repeat_period: None,
+        })
+        .await;
 
     bw_state.add_up(size);
 
     // Emit completion
     if !tid.is_empty() {
-        let _ = app_handle.emit("upload-progress", ProgressPayload {
-            id: tid, percent: 100, uploaded_bytes: size, total_bytes: size, speed_bytes_per_sec: 0,
-        });
+        let _ = app_handle.emit(
+            "upload-progress",
+            ProgressPayload {
+                id: tid,
+                percent: 100,
+                uploaded_bytes: size,
+                total_bytes: size,
+                speed_bytes_per_sec: 0,
+            },
+        );
     }
 
     Ok("File uploaded successfully".to_string())
@@ -536,8 +641,15 @@ pub async fn cmd_rename_folder(
         return Ok(true);
     }
     let client = client_opt.unwrap();
-log::info!("[RENAME_FOLDER] folder_id={}, new_name='{}'", folder_id, new_name);
-    println!("[RENAME_FOLDER] folder_id={}, new_name='{}'", folder_id, new_name);
+    log::info!(
+        "[RENAME_FOLDER] folder_id={}, new_name='{}'",
+        folder_id,
+        new_name
+    );
+    println!(
+        "[RENAME_FOLDER] folder_id={}, new_name='{}'",
+        folder_id, new_name
+    );
 
     let peer = resolve_peer(&client, Some(folder_id), &state.peer_cache).await?;
     let input_channel = match peer {
@@ -552,15 +664,24 @@ log::info!("[RENAME_FOLDER] folder_id={}, new_name='{}'", folder_id, new_name);
     };
 
     let target_title = format!("{} [TD]", new_name);
-    log::info!("[RENAME_FOLDER] Target title on Telegram will be: '{}'", target_title);
-    println!("[RENAME_FOLDER] Target title on Telegram will be: '{}'", target_title);
+    log::info!(
+        "[RENAME_FOLDER] Target title on Telegram will be: '{}'",
+        target_title
+    );
+    println!(
+        "[RENAME_FOLDER] Target title on Telegram will be: '{}'",
+        target_title
+    );
 
     // Fetch fresh channel info from Telegram to get current title
     log::info!("[RENAME_FOLDER] Fetching current channel info from Telegram...");
     println!("[RENAME_FOLDER] Fetching current channel info from Telegram...");
-    let current_title = match client.invoke(&tl::functions::channels::GetFullChannel {
-        channel: input_channel.clone(),
-    }).await {
+    let current_title = match client
+        .invoke(&tl::functions::channels::GetFullChannel {
+            channel: input_channel.clone(),
+        })
+        .await
+    {
         Ok(tl::enums::messages::ChatFull::Full(f)) => {
             let channel_opt = f.chats.iter().find_map(|c| {
                 if let tl::enums::Chat::Channel(chan) = c {
@@ -571,9 +692,15 @@ log::info!("[RENAME_FOLDER] folder_id={}, new_name='{}'", folder_id, new_name);
             });
             match channel_opt {
                 Some(c) => {
-                    log::info!("[RENAME_FOLDER] GetFullChannel Response - chats count: {}", f.chats.len());
+                    log::info!(
+                        "[RENAME_FOLDER] GetFullChannel Response - chats count: {}",
+                        f.chats.len()
+                    );
                     log::info!("[RENAME_FOLDER] Current title on Telegram: '{}'", c.title);
-                    println!("[RENAME_FOLDER] GetFullChannel Response - chats count: {}", f.chats.len());
+                    println!(
+                        "[RENAME_FOLDER] GetFullChannel Response - chats count: {}",
+                        f.chats.len()
+                    );
                     println!("[RENAME_FOLDER] Current title on Telegram: '{}'", c.title);
                     c.title.clone()
                 }
@@ -583,8 +710,15 @@ log::info!("[RENAME_FOLDER] folder_id={}, new_name='{}'", folder_id, new_name);
         Err(e) => return Err(format!("Failed to get channel info: {}", e)),
     };
 
-    log::info!("[RENAME_FOLDER] Comparing - current='{}' vs target='{}'", current_title, target_title);
-    println!("[RENAME_FOLDER] Comparing - current='{}' vs target='{}'", current_title, target_title);
+    log::info!(
+        "[RENAME_FOLDER] Comparing - current='{}' vs target='{}'",
+        current_title,
+        target_title
+    );
+    println!(
+        "[RENAME_FOLDER] Comparing - current='{}' vs target='{}'",
+        current_title, target_title
+    );
 
     if current_title == target_title {
         log::info!("[RENAME_FOLDER] SKIPPED: No change needed (title already matches)");
@@ -592,15 +726,25 @@ log::info!("[RENAME_FOLDER] folder_id={}, new_name='{}'", folder_id, new_name);
         return Ok(true);
     }
 
-    log::info!("[RENAME_FOLDER] CHANGE REQUIRED: '{}' -> '{}'", current_title, target_title);
-    println!("[RENAME_FOLDER] CHANGE REQUIRED: '{}' -> '{}'", current_title, target_title);
+    log::info!(
+        "[RENAME_FOLDER] CHANGE REQUIRED: '{}' -> '{}'",
+        current_title,
+        target_title
+    );
+    println!(
+        "[RENAME_FOLDER] CHANGE REQUIRED: '{}' -> '{}'",
+        current_title, target_title
+    );
     log::info!("[RENAME_FOLDER] Calling channels.editTitle API...");
     println!("[RENAME_FOLDER] Calling channels.editTitle API...");
 
-    match client.invoke(&tl::functions::channels::EditTitle {
-        channel: input_channel,
-        title: target_title,
-    }).await {
+    match client
+        .invoke(&tl::functions::channels::EditTitle {
+            channel: input_channel,
+            title: target_title,
+        })
+        .await
+    {
         Ok(result) => {
             log::info!("[RENAME_FOLDER] SUCCESS: API response = {:?}", result);
             println!("[RENAME_FOLDER] SUCCESS: API response = {:?}", result);
@@ -623,7 +767,12 @@ pub async fn cmd_rename_file(
 ) -> Result<bool, String> {
     let client_opt = { state.client.lock().await.clone() };
     if client_opt.is_none() {
-        log::info!("[MOCK] Renamed message {} in folder {:?} to {}", message_id, folder_id, new_name);
+        log::info!(
+            "[MOCK] Renamed message {} in folder {:?} to {}",
+            message_id,
+            folder_id,
+            new_name
+        );
         return Ok(true);
     }
     let client = client_opt.unwrap();
@@ -658,21 +807,26 @@ pub async fn cmd_rename_file(
                     access_hash: c.raw.access_hash.unwrap_or(0),
                 }),
                 Peer::User(_) => tl::enums::InputPeer::PeerSelf,
-                Peer::Group(_) => return Err("Groups are not supported for file operations.".to_string()),
+                Peer::Group(_) => {
+                    return Err("Groups are not supported for file operations.".to_string())
+                }
             };
-            client.invoke(&tl::functions::messages::EditMessage {
-                no_webpage: true,
-                peer: input_peer,
-                id: msg_id_i32,
-                message: Some(virtual_folder_meta_text(&new_name, parent_id, current_id)),
-                media: None,
-                reply_markup: None,
-                entities: None,
-                schedule_date: None,
-                invert_media: false,
-                quick_reply_shortcut_id: None,
-                schedule_repeat_period: None,
-            }).await.map_err(|e| format!("Failed to rename folder: {}", e))?;
+            client
+                .invoke(&tl::functions::messages::EditMessage {
+                    no_webpage: true,
+                    peer: input_peer,
+                    id: msg_id_i32,
+                    message: Some(virtual_folder_meta_text(&new_name, parent_id, current_id)),
+                    media: None,
+                    reply_markup: None,
+                    entities: None,
+                    schedule_date: None,
+                    invert_media: false,
+                    quick_reply_shortcut_id: None,
+                    schedule_repeat_period: None,
+                })
+                .await
+                .map_err(|e| format!("Failed to rename folder: {}", e))?;
             return Ok(true);
         }
         if let Some((_, parent_id, current_id)) = parse_virtual_file_meta(existing.text()) {
@@ -682,21 +836,26 @@ pub async fn cmd_rename_file(
                     access_hash: c.raw.access_hash.unwrap_or(0),
                 }),
                 Peer::User(_) => tl::enums::InputPeer::PeerSelf,
-                Peer::Group(_) => return Err("Groups are not supported for file operations.".to_string()),
+                Peer::Group(_) => {
+                    return Err("Groups are not supported for file operations.".to_string())
+                }
             };
-            client.invoke(&tl::functions::messages::EditMessage {
-                no_webpage: true,
-                peer: input_peer,
-                id: msg_id_i32,
-                message: Some(virtual_file_meta_text(&new_name, parent_id, current_id)),
-                media: None,
-                reply_markup: None,
-                entities: None,
-                schedule_date: None,
-                invert_media: false,
-                quick_reply_shortcut_id: None,
-                schedule_repeat_period: None,
-            }).await.map_err(|e| format!("Failed to rename file: {}", e))?;
+            client
+                .invoke(&tl::functions::messages::EditMessage {
+                    no_webpage: true,
+                    peer: input_peer,
+                    id: msg_id_i32,
+                    message: Some(virtual_file_meta_text(&new_name, parent_id, current_id)),
+                    media: None,
+                    reply_markup: None,
+                    entities: None,
+                    schedule_date: None,
+                    invert_media: false,
+                    quick_reply_shortcut_id: None,
+                    schedule_repeat_period: None,
+                })
+                .await
+                .map_err(|e| format!("Failed to rename file: {}", e))?;
             return Ok(true);
         }
     }
@@ -713,19 +872,22 @@ pub async fn cmd_rename_file(
         Peer::Group(_) => return Err("Groups are not supported for file operations.".to_string()),
     };
 
-    client.invoke(&tl::functions::messages::EditMessage {
-        no_webpage: true,
-        peer: input_peer,
-        id: msg_id_i32,
-        message: Some(new_name),
-        media: None,
-        reply_markup: None,
-        entities: None,
-        schedule_date: None,
-        invert_media: false,
-        quick_reply_shortcut_id: None,
-        schedule_repeat_period: None,
-    }).await.map_err(|e| format!("Failed to rename file (edit caption): {}", e))?;
+    client
+        .invoke(&tl::functions::messages::EditMessage {
+            no_webpage: true,
+            peer: input_peer,
+            id: msg_id_i32,
+            message: Some(new_name),
+            media: None,
+            reply_markup: None,
+            entities: None,
+            schedule_date: None,
+            invert_media: false,
+            quick_reply_shortcut_id: None,
+            schedule_repeat_period: None,
+        })
+        .await
+        .map_err(|e| format!("Failed to rename file (edit caption): {}", e))?;
 
     Ok(true)
 }
@@ -739,7 +901,12 @@ pub async fn cmd_move_to_virtual_folder(
 ) -> Result<bool, String> {
     let client_opt = { state.client.lock().await.clone() };
     if client_opt.is_none() {
-        log::info!("[MOCK] Moved messages {:?} in folder {:?} to virtual folder {:?}", message_ids, folder_id, target_virtual_folder_id);
+        log::info!(
+            "[MOCK] Moved messages {:?} in folder {:?} to virtual folder {:?}",
+            message_ids,
+            folder_id,
+            target_virtual_folder_id
+        );
         return Ok(true);
     }
     let client = client_opt.unwrap();
@@ -752,7 +919,8 @@ pub async fn cmd_move_to_virtual_folder(
         let mut tree_changed = false;
 
         // Separate folder IDs (in tree) from file IDs (real messages)
-        let (tree_ids, file_ids): (Vec<i64>, Vec<i64>) = message_ids.iter()
+        let (tree_ids, file_ids): (Vec<i64>, Vec<i64>) = message_ids
+            .iter()
             .partition(|&&id| tree_contains(&tree, id));
 
         // Move folders in tree
@@ -784,27 +952,36 @@ pub async fn cmd_move_to_virtual_folder(
                 .flatten()
                 .next()
             {
-                let (name, _, current_id) = if let Some((n, _, c)) = parse_virtual_file_meta(existing.text()) {
-                    (n, None::<i64>, c)
-                } else {
-                    let file_name = if !existing.text().is_empty() {
-                        existing.text().to_string()
-                    } else if let Some(Media::Document(doc)) = existing.media() {
-                        let n = doc.name();
-                        if n.is_empty() { "file".to_string() } else { n.to_string() }
+                let (name, _, current_id) =
+                    if let Some((n, _, c)) = parse_virtual_file_meta(existing.text()) {
+                        (n, None::<i64>, c)
                     } else {
-                        "file".to_string()
+                        let file_name = if !existing.text().is_empty() {
+                            existing.text().to_string()
+                        } else if let Some(Media::Document(doc)) = existing.media() {
+                            let n = doc.name();
+                            if n.is_empty() {
+                                "file".to_string()
+                            } else {
+                                n.to_string()
+                            }
+                        } else {
+                            "file".to_string()
+                        };
+                        (file_name, None::<i64>, Some(existing.id() as i64))
                     };
-                    (file_name, None::<i64>, Some(existing.id() as i64))
-                };
 
                 let input_peer = match &peer {
-                    Peer::Channel(c) => tl::enums::InputPeer::Channel(tl::types::InputPeerChannel {
-                        channel_id: c.raw.id,
-                        access_hash: c.raw.access_hash.unwrap_or(0),
-                    }),
+                    Peer::Channel(c) => {
+                        tl::enums::InputPeer::Channel(tl::types::InputPeerChannel {
+                            channel_id: c.raw.id,
+                            access_hash: c.raw.access_hash.unwrap_or(0),
+                        })
+                    }
                     Peer::User(_) => tl::enums::InputPeer::PeerSelf,
-                    Peer::Group(_) => return Err("Groups are not supported for file operations.".to_string()),
+                    Peer::Group(_) => {
+                        return Err("Groups are not supported for file operations.".to_string())
+                    }
                 };
 
                 let final_cid = if existing.media().is_some() {
@@ -815,19 +992,22 @@ pub async fn cmd_move_to_virtual_folder(
 
                 let new_text = virtual_file_meta_text(&name, target_virtual_folder_id, final_cid);
 
-                client.invoke(&tl::functions::messages::EditMessage {
-                    no_webpage: true,
-                    peer: input_peer,
-                    id: msg_id_i32,
-                    message: Some(new_text),
-                    media: None,
-                    reply_markup: None,
-                    entities: None,
-                    schedule_date: None,
-                    invert_media: false,
-                    quick_reply_shortcut_id: None,
-                    schedule_repeat_period: None,
-                }).await.map_err(|e| format!("Failed to move file to virtual folder: {}", e))?;
+                client
+                    .invoke(&tl::functions::messages::EditMessage {
+                        no_webpage: true,
+                        peer: input_peer,
+                        id: msg_id_i32,
+                        message: Some(new_text),
+                        media: None,
+                        reply_markup: None,
+                        entities: None,
+                        schedule_date: None,
+                        invert_media: false,
+                        quick_reply_shortcut_id: None,
+                        schedule_repeat_period: None,
+                    })
+                    .await
+                    .map_err(|e| format!("Failed to move file to virtual folder: {}", e))?;
             }
         }
 
@@ -845,21 +1025,26 @@ pub async fn cmd_move_to_virtual_folder(
             .flatten()
             .next()
         {
-            let (name, _, current_id) = if let Some((n, _, c)) = parse_virtual_file_meta(existing.text()) {
-                (n, None::<i64>, c)
-            } else if let Some((n, _, c)) = parse_virtual_folder_meta(existing.text()) {
-                (n, None::<i64>, c)
-            } else {
-                let file_name = if !existing.text().is_empty() {
-                    existing.text().to_string()
-                } else if let Some(Media::Document(doc)) = existing.media() {
-                    let n = doc.name();
-                    if n.is_empty() { "file".to_string() } else { n.to_string() }
+            let (name, _, current_id) =
+                if let Some((n, _, c)) = parse_virtual_file_meta(existing.text()) {
+                    (n, None::<i64>, c)
+                } else if let Some((n, _, c)) = parse_virtual_folder_meta(existing.text()) {
+                    (n, None::<i64>, c)
                 } else {
-                    "file".to_string()
+                    let file_name = if !existing.text().is_empty() {
+                        existing.text().to_string()
+                    } else if let Some(Media::Document(doc)) = existing.media() {
+                        let n = doc.name();
+                        if n.is_empty() {
+                            "file".to_string()
+                        } else {
+                            n.to_string()
+                        }
+                    } else {
+                        "file".to_string()
+                    };
+                    (file_name, None::<i64>, Some(existing.id() as i64))
                 };
-                (file_name, None::<i64>, Some(existing.id() as i64))
-            };
 
             let input_peer = match &peer {
                 Peer::Channel(c) => tl::enums::InputPeer::Channel(tl::types::InputPeerChannel {
@@ -867,7 +1052,9 @@ pub async fn cmd_move_to_virtual_folder(
                     access_hash: c.raw.access_hash.unwrap_or(0),
                 }),
                 Peer::User(_) => tl::enums::InputPeer::PeerSelf,
-                Peer::Group(_) => return Err("Groups are not supported for file operations.".to_string()),
+                Peer::Group(_) => {
+                    return Err("Groups are not supported for file operations.".to_string())
+                }
             };
 
             let is_folder = parse_virtual_folder_meta(existing.text()).is_some();
@@ -884,19 +1071,22 @@ pub async fn cmd_move_to_virtual_folder(
                 virtual_file_meta_text(&name, target_virtual_folder_id, final_cid)
             };
 
-            client.invoke(&tl::functions::messages::EditMessage {
-                no_webpage: true,
-                peer: input_peer,
-                id: msg_id_i32,
-                message: Some(new_text),
-                media: None,
-                reply_markup: None,
-                entities: None,
-                schedule_date: None,
-                invert_media: false,
-                quick_reply_shortcut_id: None,
-                schedule_repeat_period: None,
-            }).await.map_err(|e| format!("Failed to move file to virtual folder: {}", e))?;
+            client
+                .invoke(&tl::functions::messages::EditMessage {
+                    no_webpage: true,
+                    peer: input_peer,
+                    id: msg_id_i32,
+                    message: Some(new_text),
+                    media: None,
+                    reply_markup: None,
+                    entities: None,
+                    schedule_date: None,
+                    invert_media: false,
+                    quick_reply_shortcut_id: None,
+                    schedule_repeat_period: None,
+                })
+                .await
+                .map_err(|e| format!("Failed to move file to virtual folder: {}", e))?;
         }
     }
 
@@ -910,9 +1100,13 @@ pub async fn cmd_delete_file(
     state: State<'_, TelegramState>,
 ) -> Result<bool, String> {
     let client_opt = { state.client.lock().await.clone() };
-    if client_opt.is_none() { 
-         log::info!("[MOCK] Deleted message {} from folder {:?}", message_id, folder_id);
-        return Ok(true); 
+    if client_opt.is_none() {
+        log::info!(
+            "[MOCK] Deleted message {} from folder {:?}",
+            message_id,
+            folder_id
+        );
+        return Ok(true);
     }
     let client = client_opt.unwrap();
 
@@ -930,7 +1124,10 @@ pub async fn cmd_delete_file(
 
     // File or Saved Messages folder: use message-based deletion
     let msg_id_i32 = message_id as i32;
-    client.delete_messages(&peer, &[msg_id_i32]).await.map_err(|e| e.to_string())?;
+    client
+        .delete_messages(&peer, &[msg_id_i32])
+        .await
+        .map_err(|e| e.to_string())?;
 
     Ok(true)
 }
@@ -946,51 +1143,78 @@ pub async fn cmd_download_file(
     bw_state: State<'_, BandwidthManager>,
 ) -> Result<String, String> {
     let tid = transfer_id.unwrap_or_default();
-    log::info!("[cmd_download_file] Start: message_id={}, save_path={}, folder_id={:?}, transfer_id={}", message_id, save_path, folder_id, tid);
+    log::info!(
+        "[cmd_download_file] Start: message_id={}, save_path={}, folder_id={:?}, transfer_id={}",
+        message_id,
+        save_path,
+        folder_id,
+        tid
+    );
 
     let client_opt = { state.client.lock().await.clone() };
-    if client_opt.is_none() { 
-        log::info!("[MOCK] Downloaded message {} from {:?} to {}", message_id, folder_id, save_path);
-        if let Err(e) = std::fs::write(&save_path, b"Mock Content") { 
+    if client_opt.is_none() {
+        log::info!(
+            "[MOCK] Downloaded message {} from {:?} to {}",
+            message_id,
+            folder_id,
+            save_path
+        );
+        if let Err(e) = std::fs::write(&save_path, b"Mock Content") {
             log::error!("[cmd_download_file] MOCK write error: {}", e);
-            return Err(e.to_string()); 
+            return Err(e.to_string());
         }
         return Ok("Download successful".to_string());
     }
     let client = client_opt.unwrap();
-    
-    log::info!("[cmd_download_file] Resolving peer for folder_id: {:?}", folder_id);
+
+    log::info!(
+        "[cmd_download_file] Resolving peer for folder_id: {:?}",
+        folder_id
+    );
     let peer = resolve_peer(&client, folder_id, &state.peer_cache).await?;
     log::info!("[cmd_download_file] Peer resolved");
 
     // Use get_messages_by_id for efficient message lookup (same as server.rs)
-    log::info!("[cmd_download_file] Fetching message details for message_id: {}", message_id);
-    let messages = client.get_messages_by_id(&peer, &[message_id]).await.map_err(|e| {
-        log::error!("[cmd_download_file] Error fetching message: {}", e);
-        e.to_string()
-    })?;
-    
-    let msg = messages.into_iter()
-        .flatten()
-        .next()
-        .ok_or_else(|| {
-            log::error!("[cmd_download_file] Message not found for id={}", message_id);
-            "Message not found".to_string()
+    log::info!(
+        "[cmd_download_file] Fetching message details for message_id: {}",
+        message_id
+    );
+    let messages = client
+        .get_messages_by_id(&peer, &[message_id])
+        .await
+        .map_err(|e| {
+            log::error!("[cmd_download_file] Error fetching message: {}", e);
+            e.to_string()
         })?;
 
-    let media = msg.media()
-        .ok_or_else(|| {
-            log::error!("[cmd_download_file] No media in message id={}. Text: '{}', MsgType={:?}", message_id, msg.text(), msg);
-            "No media in message".to_string()
-        })?;
+    let msg = messages.into_iter().flatten().next().ok_or_else(|| {
+        log::error!(
+            "[cmd_download_file] Message not found for id={}",
+            message_id
+        );
+        "Message not found".to_string()
+    })?;
+
+    let media = msg.media().ok_or_else(|| {
+        log::error!(
+            "[cmd_download_file] No media in message id={}. Text: '{}', MsgType={:?}",
+            message_id,
+            msg.text(),
+            msg
+        );
+        "No media in message".to_string()
+    })?;
 
     let total_size = match &media {
         Media::Document(d) => d.size() as u64,
         Media::Photo(_) => 1024 * 1024,
         _ => 0,
     };
-    log::info!("[cmd_download_file] Media found, total_size: {}", total_size);
-    
+    log::info!(
+        "[cmd_download_file] Media found, total_size: {}",
+        total_size
+    );
+
     bw_state.can_transfer(total_size).map_err(|e| {
         log::error!("[cmd_download_file] Bandwidth limit exceeded: {}", e);
         e
@@ -998,15 +1222,25 @@ pub async fn cmd_download_file(
 
     // Emit start
     if !tid.is_empty() {
-        let _ = app_handle.emit("download-progress", ProgressPayload {
-            id: tid.clone(), percent: 0, uploaded_bytes: 0, total_bytes: total_size, speed_bytes_per_sec: 0,
-        });
+        let _ = app_handle.emit(
+            "download-progress",
+            ProgressPayload {
+                id: tid.clone(),
+                percent: 0,
+                uploaded_bytes: 0,
+                total_bytes: total_size,
+                speed_bytes_per_sec: 0,
+            },
+        );
     }
 
     // Create parent directories if they don't exist
     if let Some(parent) = std::path::Path::new(&save_path).parent() {
         if !parent.exists() {
-            log::info!("[cmd_download_file] Creating parent directories: {:?}", parent);
+            log::info!(
+                "[cmd_download_file] Creating parent directories: {:?}",
+                parent
+            );
             std::fs::create_dir_all(parent).map_err(|e| {
                 log::error!("[cmd_download_file] Directory creation error: {}", e);
                 e.to_string()
@@ -1044,31 +1278,56 @@ pub async fn cmd_download_file(
             e.to_string()
         })?;
         downloaded += bytes.len() as u64;
-        
+
         // Time-based progress emission (every 250ms)
         if !tid.is_empty() {
             let now = std::time::Instant::now();
             let dt = now.duration_since(last_emit_time).as_secs_f64();
             if dt >= 0.25 || downloaded >= total_size {
-                let speed = if dt > 0.0 { ((downloaded - last_emit_bytes) as f64 / dt) as u64 } else { 0 };
-                let percent = if total_size > 0 { ((downloaded as f64 / total_size as f64) * 100.0).min(100.0) as u8 } else { 0 };
-                let _ = app_handle.emit("download-progress", ProgressPayload {
-                    id: tid.clone(), percent, uploaded_bytes: downloaded, total_bytes: total_size, speed_bytes_per_sec: speed,
-                });
+                let speed = if dt > 0.0 {
+                    ((downloaded - last_emit_bytes) as f64 / dt) as u64
+                } else {
+                    0
+                };
+                let percent = if total_size > 0 {
+                    ((downloaded as f64 / total_size as f64) * 100.0).min(100.0) as u8
+                } else {
+                    0
+                };
+                let _ = app_handle.emit(
+                    "download-progress",
+                    ProgressPayload {
+                        id: tid.clone(),
+                        percent,
+                        uploaded_bytes: downloaded,
+                        total_bytes: total_size,
+                        speed_bytes_per_sec: speed,
+                    },
+                );
                 last_emit_time = now;
                 last_emit_bytes = downloaded;
             }
         }
     }
 
-    log::info!("[cmd_download_file] Download completed successfully: {} bytes", downloaded);
+    log::info!(
+        "[cmd_download_file] Download completed successfully: {} bytes",
+        downloaded
+    );
     bw_state.add_down(total_size);
 
     // Emit completion
     if !tid.is_empty() {
-        let _ = app_handle.emit("download-progress", ProgressPayload {
-            id: tid, percent: 100, uploaded_bytes: downloaded, total_bytes: total_size, speed_bytes_per_sec: 0,
-        });
+        let _ = app_handle.emit(
+            "download-progress",
+            ProgressPayload {
+                id: tid,
+                percent: 100,
+                uploaded_bytes: downloaded,
+                total_bytes: total_size,
+                speed_bytes_per_sec: 0,
+            },
+        );
     }
 
     Ok("Download successful".to_string())
@@ -1081,31 +1340,41 @@ pub async fn cmd_move_files(
     target_folder_id: Option<i64>,
     state: State<'_, TelegramState>,
 ) -> Result<Vec<i32>, String> {
-    if source_folder_id == target_folder_id { return Ok(message_ids); }
+    if source_folder_id == target_folder_id {
+        return Ok(message_ids);
+    }
     let client_opt = { state.client.lock().await.clone() };
-    if client_opt.is_none() { 
-        log::info!("[MOCK] Moved msgs {:?} from {:?} to {:?}", message_ids, source_folder_id, target_folder_id);
-        return Ok(message_ids); 
+    if client_opt.is_none() {
+        log::info!(
+            "[MOCK] Moved msgs {:?} from {:?} to {:?}",
+            message_ids,
+            source_folder_id,
+            target_folder_id
+        );
+        return Ok(message_ids);
     }
     let client = client_opt.unwrap();
 
     let source_peer = resolve_peer(&client, source_folder_id, &state.peer_cache).await?;
     let target_peer = resolve_peer(&client, target_folder_id, &state.peer_cache).await?;
 
-    let forwarded = match client.forward_messages(&target_peer, &message_ids, &source_peer).await {
+    let forwarded = match client
+        .forward_messages(&target_peer, &message_ids, &source_peer)
+        .await
+    {
         Ok(messages) => messages,
         Err(e) => return Err(format!("Forward failed: {}", e)),
     };
-    
+
     // Extract new message IDs from the forwarded messages
     let new_ids: Vec<i32> = forwarded
         .into_iter()
         .flatten()
         .map(|msg| msg.id())
         .collect();
-    
+
     match client.delete_messages(&source_peer, &message_ids).await {
-        Ok(_) => {},
+        Ok(_) => {}
         Err(e) => return Err(format!("Delete original failed: {}", e)),
     }
 
@@ -1125,7 +1394,12 @@ pub async fn cmd_share_files(
 
     let client_opt = { state.client.lock().await.clone() };
     if client_opt.is_none() {
-        log::info!("[MOCK] Shared msgs {:?} from {:?} to {:?}", message_ids, source_folder_id, target_folder_id);
+        log::info!(
+            "[MOCK] Shared msgs {:?} from {:?} to {:?}",
+            message_ids,
+            source_folder_id,
+            target_folder_id
+        );
         return Ok(true);
     }
     let client = client_opt.unwrap();
@@ -1148,19 +1422,19 @@ pub async fn cmd_get_files(
     state: State<'_, TelegramState>,
 ) -> Result<Vec<FileMetadata>, String> {
     let client_opt = { state.client.lock().await.clone() };
-    if client_opt.is_none() { 
+    if client_opt.is_none() {
         log::info!("[MOCK] Returning mock files for folder {:?}", folder_id);
         return Ok(Vec::new()); // No mock files for now
     }
     let client = client_opt.unwrap();
     let mut files = Vec::new();
-    
+
     let peer = resolve_peer(&client, folder_id, &state.peer_cache).await?;
 
     let mut msgs = client.iter_messages(&peer);
     while let Some(msg) = msgs.next().await.map_err(|e| e.to_string())? {
         let text = msg.text();
-        
+
         // 1. Check for Virtual Folder
         // Drives: folders come from the pinned tree, skip all folder metadata messages
         // Saved Messages: scan for folder metadata (no pinned tree available)
@@ -1170,7 +1444,11 @@ pub async fn cmd_get_files(
             }
         } else if let Some((name, parent_id, meta_cid)) = parse_virtual_folder_meta(text) {
             if parent_id == virtual_folder_id {
-                log::debug!("[cmd_get_files] Found virtual folder: id={}, name={}", msg.id(), name);
+                log::debug!(
+                    "[cmd_get_files] Found virtual folder: id={}, name={}",
+                    msg.id(),
+                    name
+                );
                 files.push(FileMetadata {
                     id: msg.id() as i64,
                     folder_id,
@@ -1206,10 +1484,17 @@ pub async fn cmd_get_files(
                     let n = d.name().to_string();
                     let s = d.size();
                     let m = d.mime_type().map(|s| s.to_string());
-                    let e = std::path::Path::new(&n).extension().map(|os| os.to_str().unwrap_or("").to_string());
+                    let e = std::path::Path::new(&n)
+                        .extension()
+                        .map(|os| os.to_str().unwrap_or("").to_string());
                     (n, s, m, e)
-                },
-                Media::Photo(_) => ("Photo.jpg".to_string(), 0, Some("image/jpeg".into()), Some("jpg".into())),
+                }
+                Media::Photo(_) => (
+                    "Photo.jpg".to_string(),
+                    0,
+                    Some("image/jpeg".into()),
+                    Some("jpg".into()),
+                ),
                 _ => ("Unknown".to_string(), 0, None, None),
             };
 
@@ -1227,7 +1512,12 @@ pub async fn cmd_get_files(
 
             // Only include if it's in the root (virtual_folder_id is None) OR if it was explicitly matched via metadata
             if virtual_folder_id.is_none() || virtual_file.is_some() {
-                log::debug!("[cmd_get_files] Adding file: id={}, name={}, current_id={}", msg.id(), name, final_current_id);
+                log::debug!(
+                    "[cmd_get_files] Adding file: id={}, name={}, current_id={}",
+                    msg.id(),
+                    name,
+                    final_current_id
+                );
                 files.push(FileMetadata {
                     id: msg.id() as i64,
                     folder_id,
@@ -1244,7 +1534,12 @@ pub async fn cmd_get_files(
             }
         } else if let Some((name, meta_cid)) = virtual_file {
             // Text-only virtual file pointer (rare, but supported)
-            log::debug!("[cmd_get_files] Adding text-only virtual file: id={}, name={}, current_id={:?}", msg.id(), name, meta_cid);
+            log::debug!(
+                "[cmd_get_files] Adding text-only virtual file: id={}, name={}, current_id={:?}",
+                msg.id(),
+                name,
+                meta_cid
+            );
             files.push(FileMetadata {
                 id: msg.id() as i64,
                 folder_id,
@@ -1298,7 +1593,11 @@ pub async fn cmd_create_virtual_folder(
         // Drives: tree-only approach — no folder metadata message sent
         let mut tree = read_tree(&client, &peer).await?.unwrap_or_default();
         let id = next_folder_id(&tree);
-        let new_node = FolderTreeNode { id, name: name.clone(), children: vec![] };
+        let new_node = FolderTreeNode {
+            id,
+            name: name.clone(),
+            children: vec![],
+        };
 
         if let Some(parent_id) = parent_virtual_folder_id {
             if !add_node_to_tree(&mut tree, parent_id, new_node) {
@@ -1320,14 +1619,25 @@ pub async fn cmd_create_virtual_folder(
             size: 0,
             mime_type: None,
             file_ext: None,
-            created_at: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs().to_string(),
+            created_at: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs()
+                .to_string(),
             icon_type: "folder".into(),
         });
     }
 
     // Saved Messages: keep old behavior (send folder metadata message)
     let sent = client
-        .send_message(&peer, InputMessage::new().text(virtual_folder_meta_text(&name, parent_virtual_folder_id, None)))
+        .send_message(
+            &peer,
+            InputMessage::new().text(virtual_folder_meta_text(
+                &name,
+                parent_virtual_folder_id,
+                None,
+            )),
+        )
         .await
         .map_err(map_error)?;
 
@@ -1341,19 +1651,25 @@ pub async fn cmd_create_virtual_folder(
         Peer::Group(_) => return Err("Groups are not supported for file operations.".to_string()),
     };
 
-    let _ = client.invoke(&tl::functions::messages::EditMessage {
-        no_webpage: true,
-        peer: input_peer,
-        id: message_id,
-        message: Some(virtual_folder_meta_text(&name, parent_virtual_folder_id, Some(message_id as i64))),
-        media: None,
-        reply_markup: None,
-        entities: None,
-        schedule_date: None,
-        invert_media: false,
-        quick_reply_shortcut_id: None,
-        schedule_repeat_period: None,
-    }).await;
+    let _ = client
+        .invoke(&tl::functions::messages::EditMessage {
+            no_webpage: true,
+            peer: input_peer,
+            id: message_id,
+            message: Some(virtual_folder_meta_text(
+                &name,
+                parent_virtual_folder_id,
+                Some(message_id as i64),
+            )),
+            media: None,
+            reply_markup: None,
+            entities: None,
+            schedule_date: None,
+            invert_media: false,
+            quick_reply_shortcut_id: None,
+            schedule_repeat_period: None,
+        })
+        .await;
 
     Ok(FileMetadata {
         id: sent.id() as i64,
@@ -1376,45 +1692,56 @@ pub async fn cmd_search_global(
     state: State<'_, TelegramState>,
 ) -> Result<Vec<FileMetadata>, String> {
     let client_opt = { state.client.lock().await.clone() };
-    if client_opt.is_none() { 
+    if client_opt.is_none() {
         return Ok(Vec::new());
     }
     let client = client_opt.unwrap();
     let mut files = Vec::new();
-    
+
     log::info!("Searching global for: {}", query);
 
-    let result = client.invoke(&tl::functions::messages::SearchGlobal {
-        q: query,
-        filter: tl::enums::MessagesFilter::InputMessagesFilterDocument,
-        min_date: 0,
-        max_date: 0,
-        offset_rate: 0,
-        offset_peer: tl::enums::InputPeer::Empty,
-        offset_id: 0,
-        limit: 50,
-        folder_id: None,
-        broadcasts_only: false,
-        groups_only: false,
-        users_only: false,
-    }).await.map_err(map_error)?;
+    let result = client
+        .invoke(&tl::functions::messages::SearchGlobal {
+            q: query,
+            filter: tl::enums::MessagesFilter::InputMessagesFilterDocument,
+            min_date: 0,
+            max_date: 0,
+            offset_rate: 0,
+            offset_peer: tl::enums::InputPeer::Empty,
+            offset_id: 0,
+            limit: 50,
+            folder_id: None,
+            broadcasts_only: false,
+            groups_only: false,
+            users_only: false,
+        })
+        .await
+        .map_err(map_error)?;
 
     if let tl::enums::messages::Messages::Messages(msgs) = result {
         for msg in msgs.messages {
             if let tl::enums::Message::Message(m) = msg {
                 if let Some(tl::enums::MessageMedia::Document(d)) = m.media {
                     if let tl::enums::Document::Document(doc) = d.document.unwrap() {
-                        let mut name = doc.attributes.iter().find_map(|a| match a {
-                            tl::enums::DocumentAttribute::Filename(f) => Some(f.file_name.clone()),
-                            _ => None
-                        }).unwrap_or("Unknown".to_string());
+                        let mut name = doc
+                            .attributes
+                            .iter()
+                            .find_map(|a| match a {
+                                tl::enums::DocumentAttribute::Filename(f) => {
+                                    Some(f.file_name.clone())
+                                }
+                                _ => None,
+                            })
+                            .unwrap_or("Unknown".to_string());
 
                         let mut current_id = Some(m.id as i64);
 
                         // Use message text (caption) as rename override if present
                         if !m.message.is_empty() {
                             name = m.message.clone();
-                            if let Some((meta_name, _, meta_current_id)) = parse_virtual_file_meta(&m.message) {
+                            if let Some((meta_name, _, meta_current_id)) =
+                                parse_virtual_file_meta(&m.message)
+                            {
                                 name = meta_name;
                                 if let Some(cid) = meta_current_id {
                                     current_id = Some(cid);
@@ -1424,7 +1751,9 @@ pub async fn cmd_search_global(
 
                         let size = doc.size as u64;
                         let mime = doc.mime_type.clone();
-                        let ext = std::path::Path::new(&name).extension().map(|os| os.to_str().unwrap_or("").to_string());
+                        let ext = std::path::Path::new(&name)
+                            .extension()
+                            .map(|os| os.to_str().unwrap_or("").to_string());
                         let folder_id = match m.peer_id {
                             tl::enums::Peer::Channel(c) => Some(c.channel_id),
                             tl::enums::Peer::User(u) => Some(u.user_id),
@@ -1438,8 +1767,10 @@ pub async fn cmd_search_global(
                             current_id,
                             name,
                             size,
-                            mime_type: Some(mime), file_ext: ext,
-                            created_at: m.date.to_string(), icon_type: "file".into()
+                            mime_type: Some(mime),
+                            file_ext: ext,
+                            created_at: m.date.to_string(),
+                            icon_type: "file".into(),
                         });
                     }
                 }
@@ -1450,17 +1781,25 @@ pub async fn cmd_search_global(
             if let tl::enums::Message::Message(m) = msg {
                 if let Some(tl::enums::MessageMedia::Document(d)) = m.media {
                     if let tl::enums::Document::Document(doc) = d.document.unwrap() {
-                        let mut name = doc.attributes.iter().find_map(|a| match a {
-                            tl::enums::DocumentAttribute::Filename(f) => Some(f.file_name.clone()),
-                            _ => None
-                        }).unwrap_or("Unknown".to_string());
+                        let mut name = doc
+                            .attributes
+                            .iter()
+                            .find_map(|a| match a {
+                                tl::enums::DocumentAttribute::Filename(f) => {
+                                    Some(f.file_name.clone())
+                                }
+                                _ => None,
+                            })
+                            .unwrap_or("Unknown".to_string());
 
                         let mut current_id = Some(m.id as i64);
 
                         // Use message text (caption) as rename override if present
                         if !m.message.is_empty() {
                             name = m.message.clone();
-                            if let Some((meta_name, _, meta_current_id)) = parse_virtual_file_meta(&m.message) {
+                            if let Some((meta_name, _, meta_current_id)) =
+                                parse_virtual_file_meta(&m.message)
+                            {
                                 name = meta_name;
                                 if let Some(cid) = meta_current_id {
                                     current_id = Some(cid);
@@ -1470,7 +1809,9 @@ pub async fn cmd_search_global(
 
                         let size = doc.size as u64;
                         let mime = doc.mime_type.clone();
-                        let ext = std::path::Path::new(&name).extension().map(|os| os.to_str().unwrap_or("").to_string());
+                        let ext = std::path::Path::new(&name)
+                            .extension()
+                            .map(|os| os.to_str().unwrap_or("").to_string());
                         let folder_id = match m.peer_id {
                             tl::enums::Peer::Channel(c) => Some(c.channel_id),
                             tl::enums::Peer::User(u) => Some(u.user_id),
@@ -1484,8 +1825,10 @@ pub async fn cmd_search_global(
                             current_id,
                             name,
                             size,
-                            mime_type: Some(mime), file_ext: ext,
-                            created_at: m.date.to_string(), icon_type: "file".into()
+                            mime_type: Some(mime),
+                            file_ext: ext,
+                            created_at: m.date.to_string(),
+                            icon_type: "file".into(),
                         });
                     }
                 }
@@ -1517,9 +1860,7 @@ pub async fn cmd_get_folder_tree(
 }
 
 #[tauri::command]
-pub async fn cmd_init_folder_trees(
-    state: State<'_, TelegramState>,
-) -> Result<usize, String> {
+pub async fn cmd_init_folder_trees(state: State<'_, TelegramState>) -> Result<usize, String> {
     let client_opt = { state.client.lock().await.clone() };
     if client_opt.is_none() {
         return Ok(0);
@@ -1568,18 +1909,19 @@ pub async fn cmd_scan_folders(
     state: State<'_, TelegramState>,
 ) -> Result<Vec<FolderMetadata>, String> {
     let client_opt = { state.client.lock().await.clone() };
-    if client_opt.is_none() { 
+    if client_opt.is_none() {
         return Ok(Vec::new());
     }
     let client = client_opt.unwrap();
-    
+
     let mut folders = Vec::new();
     let mut dialogs = client.iter_dialogs();
-    
+
     log::info!("Starting Folder Scan...");
 
     // Acquire write lock once for the entire scan to populate the peer cache
     let mut peer_cache = state.peer_cache.write().await;
+    let mut seen_channels = HashSet::new();
 
     while let Some(dialog) = dialogs.next().await.map_err(|e| e.to_string())? {
         // Populate peer cache for every dialog we encounter (free priming)
@@ -1588,68 +1930,37 @@ pub async fn cmd_scan_folders(
                 let id = c.raw.id;
                 peer_cache.insert(id, dialog.peer.clone());
 
+                if !c.raw.broadcast || !seen_channels.insert(id) {
+                    continue;
+                }
+
                 let name = c.raw.title.clone();
-                let access_hash = c.raw.access_hash.unwrap_or(0);
-                
-                log::debug!("[SCAN] Processing Channel: '{}' (ID: {})", name, id);
+                log::debug!("[SCAN] Processing drive channel: '{}' (ID: {})", name, id);
 
-                // Strategy 1: Title
-                if name.to_lowercase().contains("[td]") {
-                    log::info!(" -> MATCH via Title: {}", name);
-                    let display_name = name.replace(" [TD]", "").replace(" [td]", "").replace("[TD]", "").replace("[td]", "").trim().to_string();
-                    folders.push(FolderMetadata { 
-                        id, 
-                        name: display_name, 
-                        parent_id: None,
-                        current_id: Some(id),
-                        member_count: 0,
-                        top_members: Vec::new(),
-                    });
-                    continue; 
-                }
-
-                // Strategy 2: About
-                let input_chan = tl::enums::InputChannel::Channel(tl::types::InputChannel {
-                    channel_id: c.raw.id,
-                    access_hash,
+                folders.push(FolderMetadata {
+                    id,
+                    name: clean_drive_channel_name(&name),
+                    parent_id: None,
+                    current_id: Some(id),
+                    member_count: c.raw.participants_count.unwrap_or(0),
+                    top_members: Vec::new(),
                 });
-                
-                match client.invoke(&tl::functions::channels::GetFullChannel {
-                    channel: input_chan,
-                }).await {
-                    Ok(tl::enums::messages::ChatFull::Full(f)) => {
-                        let member_count = match &f.full_chat {
-                            tl::enums::ChatFull::ChannelFull(cf) => cf.participants_count.unwrap_or(0),
-                            _ => 0,
-                        };
-
-                        if let tl::enums::ChatFull::ChannelFull(cf) = &f.full_chat {
-                             if cf.about.contains("[telegram-drive-folder]") {
-                                 log::info!(" -> MATCH via About: {}", name);
-                                 folders.push(FolderMetadata { 
-                                     id, 
-                                     name: name.clone(), 
-                                     parent_id: None,
-                                     current_id: Some(id),
-                                     member_count,
-                                     top_members: Vec::new(),
-                                 });
-                             }
-                        }
-                    },
-                    Err(e) => log::warn!(" -> Failed to get full info: {}", e),
-                }
-            },
+            }
             Peer::User(u) => {
                 peer_cache.insert(u.raw.id(), dialog.peer.clone());
                 log::debug!("[SCAN] Cached User Peer: {}", u.raw.id());
-            },
-            peer => {
-                log::debug!("[SCAN] Skipped Peer: {:?}", peer);
+            }
+            Peer::Group(g) => {
+                peer_cache.insert(g.raw.id(), dialog.peer.clone());
+                log::debug!("[SCAN] Cached Group Peer: {}", g.raw.id());
             }
         }
     }
-    
-    log::info!("Scan complete. Found {} folders. Peer cache size: {}.", folders.len(), peer_cache.len());
+
+    log::info!(
+        "Scan complete. Found {} folders. Peer cache size: {}.",
+        folders.len(),
+        peer_cache.len()
+    );
     Ok(folders)
 }

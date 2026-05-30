@@ -2,7 +2,7 @@ use std::net::TcpStream;
 use std::time::Duration;
 
 /// Ultra-lightweight network check
-/// 
+///
 /// Simply tries to connect to Telegram's servers without using grammers.
 /// This avoids the stack overflow bug from grammers reconnection logic.
 #[tauri::command]

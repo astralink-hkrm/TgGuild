@@ -7,6 +7,34 @@ export function formatBytes(bytes: number, decimals = 2) {
     return `${parseFloat((bytes / Math.pow(k, i)).toFixed(dm))} ${sizes[i]}`;
 }
 
+export function formatDisplayDate(value?: string | null) {
+    if (!value) return '-';
+
+    const normalized = value.trim().replace(/\sUTC$/, 'Z');
+    const parsed = new Date(normalized.includes('T') ? normalized : normalized.replace(' ', 'T'));
+    if (Number.isNaN(parsed.getTime())) return value;
+
+    const sameDayKey = (date: Date) => {
+        const year = date.getFullYear();
+        const month = String(date.getMonth() + 1).padStart(2, '0');
+        const day = String(date.getDate()).padStart(2, '0');
+        return `${year}-${month}-${day}`;
+    };
+    const today = new Date();
+    const yesterday = new Date(today);
+    yesterday.setDate(today.getDate() - 1);
+    const time = parsed.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+    if (sameDayKey(parsed) === sameDayKey(today)) return `Today, ${time}`;
+    if (sameDayKey(parsed) === sameDayKey(yesterday)) return `Yesterday, ${time}`;
+
+    return parsed.toLocaleDateString([], {
+        month: 'short',
+        day: 'numeric',
+        year: parsed.getFullYear() === today.getFullYear() ? undefined : 'numeric',
+    });
+}
+
 // ── File type classification ────────────────────────────────────────────
 
 const VIDEO_EXTENSIONS = ['mp4', 'webm', 'ogg', 'mov', 'mkv', 'avi'] as const;
