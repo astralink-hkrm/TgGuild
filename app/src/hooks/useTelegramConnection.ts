@@ -6,6 +6,7 @@ import { toast } from 'sonner';
 import { useConfirm } from '../context/ConfirmContext';
 import { TelegramFolder } from '../types';
 import { useNetworkStatus } from './useNetworkStatus';
+import { readTeamVisibility, isDriveVisible } from '../components/dashboard/teamVisibility';
 
 export function useTelegramConnection(onLogoutParent: () => void) {
     const queryClient = useQueryClient();
@@ -36,7 +37,12 @@ export function useTelegramConnection(onLogoutParent: () => void) {
         baseFolders: TelegramFolder[],
         showToast: boolean,
     ) => {
-        const foundFolders = await invoke<TelegramFolder[]>('cmd_scan_folders');
+        const visibility = readTeamVisibility();
+        const selectiveIds = visibility.selectiveSync 
+            ? baseFolders.filter(f => isDriveVisible(f.id, visibility)).map(f => f.id)
+            : null;
+
+        const foundFolders = await invoke<TelegramFolder[]>('cmd_scan_folders', { selectiveIds });
         const knownIds = new Set(baseFolders.map(folder => folder.id));
         const added = foundFolders.filter(folder => !knownIds.has(folder.id)).length;
         const merged = mergeFolderLists(baseFolders, foundFolders);
@@ -179,7 +185,7 @@ export function useTelegramConnection(onLogoutParent: () => void) {
         if (!store) return;
         setIsSyncing(true);
         try {
-            await refreshFoldersFromTelegram(store, folders, true);
+            await refreshFoldersFromTelegram(store, folders, true, true);
         } catch {
             toast.error("Sync failed");
         } finally {

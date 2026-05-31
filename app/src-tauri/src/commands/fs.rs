@@ -1974,6 +1974,7 @@ pub async fn cmd_init_folder_trees(state: State<'_, TelegramState>) -> Result<us
 #[tauri::command]
 pub async fn cmd_scan_folders(
     state: State<'_, TelegramState>,
+    selective_ids: Option<Vec<i64>>,
 ) -> Result<Vec<FolderMetadata>, String> {
     let client_opt = { state.client.lock().await.clone() };
     if client_opt.is_none() {
@@ -1990,12 +1991,30 @@ pub async fn cmd_scan_folders(
     let mut peer_cache = state.peer_cache.write().await;
     let mut seen_channels = HashSet::new();
 
+    let selective_set: Option<HashSet<i64>> = selective_ids.map(|ids| ids.into_iter().collect());
+    let mut remaining_selective = selective_set.clone();
+
     while let Some(dialog) = dialogs.next().await.map_err(|e| e.to_string())? {
+        if let Some(ref mut remaining) = remaining_selective {
+            if remaining.is_empty() {
+                break;
+            }
+        }
+
         // Populate peer cache for every dialog we encounter (free priming)
         match &dialog.peer {
             Peer::Channel(c) => {
                 let id = c.raw.id;
                 peer_cache.insert(id, dialog.peer.clone());
+
+                if let Some(ref selective) = selective_set {
+                    if !selective.contains(&id) {
+                        continue;
+                    }
+                    if let Some(ref mut remaining) = remaining_selective {
+                        remaining.remove(&id);
+                    }
+                }
 
                 if !c.raw.broadcast || !seen_channels.insert(id) {
                     continue;
@@ -2014,12 +2033,25 @@ pub async fn cmd_scan_folders(
                 });
             }
             Peer::User(u) => {
-                peer_cache.insert(u.raw.id(), dialog.peer.clone());
-                log::debug!("[SCAN] Cached User Peer: {}", u.raw.id());
+                let id = u.raw.id();
+                peer_cache.insert(id, dialog.peer.clone());
+                log::debug!("[SCAN] Cached User Peer: {}", id);
+                if let Some(ref mut remaining) = remaining_selective {
+                    remaining.remove(&id);
+                }
             }
             Peer::Group(g) => {
-                peer_cache.insert(g.raw.id(), dialog.peer.clone());
-                log::debug!("[SCAN] Cached Group Peer: {}", g.raw.id());
+                let id = g.raw.id();
+                peer_cache.insert(id, dialog.peer.clone());
+                log::debug!("[SCAN] Cached Group Peer: {}", id);
+
+                if let Some(ref selective) = selective_set {
+                    if selective.contains(&id) {
+                        if let Some(ref mut remaining) = remaining_selective {
+                            remaining.remove(&id);
+                        }
+                    }
+                }
             }
         }
     }

@@ -5,12 +5,14 @@ export interface TeamVisibilitySettings {
     hiddenTeamIds: string[];
     hiddenContactIds: string[];
     hiddenDriveIds: string[];
+    selectiveSync: boolean;
 }
 
 export const defaultTeamVisibility: TeamVisibilitySettings = {
     hiddenTeamIds: [],
     hiddenContactIds: [],
     hiddenDriveIds: [],
+    selectiveSync: false,
 };
 
 export function readTeamVisibility(): TeamVisibilitySettings {
@@ -25,6 +27,7 @@ export function readTeamVisibility(): TeamVisibilitySettings {
             hiddenTeamIds: Array.isArray(parsed.hiddenTeamIds) ? parsed.hiddenTeamIds.map(String) : [],
             hiddenContactIds: Array.isArray(parsed.hiddenContactIds) ? parsed.hiddenContactIds.map(String) : [],
             hiddenDriveIds: Array.isArray(parsed.hiddenDriveIds) ? parsed.hiddenDriveIds.map(String) : [],
+            selectiveSync: !!parsed.selectiveSync,
         };
     } catch {
         return defaultTeamVisibility;

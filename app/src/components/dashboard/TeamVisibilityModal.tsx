@@ -144,6 +144,20 @@ export function TeamVisibilityModal({
                             className="w-full rounded-xl border border-telegram-border bg-telegram-hover py-2 pl-9 pr-3 text-sm text-telegram-text outline-none focus:border-telegram-primary"
                         />
                     </div>
+                    
+                    <button
+                        onClick={() => updateSettings({ ...settings, selectiveSync: !settings.selectiveSync })}
+                        className="mb-3 flex w-full items-center gap-3 rounded-xl border border-telegram-primary/20 bg-telegram-primary/5 px-3 py-3 text-left hover:bg-telegram-primary/10"
+                    >
+                        <div className={`flex h-5 w-10 items-center rounded-full px-1 transition-colors ${settings.selectiveSync ? 'bg-telegram-primary' : 'bg-telegram-subtext'}`}>
+                            <div className={`h-3 w-3 rounded-full bg-white transition-transform ${settings.selectiveSync ? 'translate-x-5' : 'translate-x-0'}`} />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                            <p className="text-sm font-semibold text-telegram-text">Selective Sync (Performance Mode)</p>
+                            <p className="text-[10px] text-telegram-subtext leading-tight">Only load data for selected items. Speeds up app startup and reduces data usage.</p>
+                        </div>
+                    </button>
+
                     <button
                         onClick={toggleAll}
                         className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left hover:bg-telegram-hover"

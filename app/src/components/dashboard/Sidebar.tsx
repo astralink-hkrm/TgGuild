@@ -121,8 +121,16 @@ export function Sidebar({
             }
 
             const [groupResp, contactResp] = await Promise.all([
-                invoke<{ teams: GroupInfo[]; next_before_date: number | null; has_more: boolean }>('cmd_get_teams'),
-                invoke<{ chats: ContactInfo[]; next_before_date: number | null; has_more: boolean }>('cmd_get_direct_chats'),
+                invoke<{ teams: GroupInfo[]; next_before_date: number | null; has_more: boolean }>('cmd_get_teams', {
+                    selectiveIds: teamVisibility.selectiveSync 
+                        ? groups.filter(g => isTeamVisible(g.id, teamVisibility)).map(g => g.id)
+                        : null
+                }),
+                invoke<{ chats: ContactInfo[]; next_before_date: number | null; has_more: boolean }>('cmd_get_direct_chats', {
+                    selectiveIds: teamVisibility.selectiveSync
+                        ? contacts.filter(c => isContactVisible(c.user_id, teamVisibility)).map(c => parseInt(c.user_id))
+                        : null
+                }),
             ]);
             setGroups(groupResp.teams);
             setContacts(contactResp.chats);
