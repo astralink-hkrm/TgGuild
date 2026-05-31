@@ -5,7 +5,7 @@ use crate::TelegramState;
 use grammers_client::types::{Media, Peer};
 use grammers_client::InputMessage;
 use grammers_tl_types as tl;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use tauri::{Emitter, State};
 
 #[derive(Clone, serde::Serialize)]
@@ -212,6 +212,97 @@ fn remove_node_return(tree: &mut Vec<FolderTreeNode>, id: i64) -> Option<FolderT
         }
     }
     None
+}
+
+fn collect_folder_ids_recursive(node: &FolderTreeNode, ids: &mut HashSet<i64>) {
+    ids.insert(node.id);
+    for child in &node.children {
+        collect_folder_ids_recursive(child, ids);
+    }
+}
+
+async fn get_all_descendant_virtual_ids(
+    client: &grammers_client::Client,
+    peer: &Peer,
+    root_virtual_id: i64,
+) -> Result<Vec<i32>, String> {
+    log::info!("Scanning for descendants of folder message ID {}", root_virtual_id);
+    let mut all_to_delete = Vec::new();
+    all_to_delete.push(root_virtual_id as i32);
+
+    let mut parent_to_children: HashMap<i64, Vec<(i32, bool)>> = HashMap::new();
+
+    let mut msgs = client.iter_messages(peer);
+    while let Some(msg) = msgs.next().await.map_err(|e| e.to_string())? {
+        let text = msg.text();
+        if let Some((_, pid, _)) = parse_virtual_folder_meta(text) {
+            if let Some(p) = pid {
+                parent_to_children.entry(p).or_default().push((msg.id(), true));
+            }
+        } else if let Some((_, pid, _)) = parse_virtual_file_meta(text) {
+            if let Some(p) = pid {
+                parent_to_children.entry(p).or_default().push((msg.id(), false));
+            }
+        }
+    }
+
+    let mut stack = vec![root_virtual_id];
+    let mut folder_ids_seen = HashSet::new();
+    folder_ids_seen.insert(root_virtual_id);
+
+    while let Some(current) = stack.pop() {
+        if let Some(children) = parent_to_children.get(&current) {
+            for (cid, is_folder) in children {
+                all_to_delete.push(*cid);
+                if *is_folder {
+                    if folder_ids_seen.insert(*cid as i64) {
+                        stack.push(*cid as i64);
+                    }
+                }
+            }
+        }
+    }
+
+    log::info!("Found {} descendant messages to delete", all_to_delete.len() - 1);
+    Ok(all_to_delete)
+}
+
+async fn delete_drive_messages_for_folders(
+    client: &grammers_client::Client,
+    peer: &Peer,
+    folder_ids: HashSet<i64>,
+) -> Result<(), String> {
+    log::info!("Scanning Drive for messages in {} folders", folder_ids.len());
+    let mut to_delete = Vec::new();
+    let mut msgs = client.iter_messages(peer);
+    while let Some(msg) = msgs.next().await.map_err(|e| e.to_string())? {
+        let text = msg.text();
+        if let Some((_, pid, _)) = parse_virtual_file_meta(text) {
+            if let Some(p) = pid {
+                if folder_ids.contains(&p) {
+                    to_delete.push(msg.id());
+                }
+            }
+        }
+        if let Some((_, pid, _)) = parse_virtual_folder_meta(text) {
+            if let Some(p) = pid {
+                if folder_ids.contains(&p) {
+                    to_delete.push(msg.id());
+                }
+            }
+        }
+    }
+
+    if !to_delete.is_empty() {
+        log::info!("Deleting {} messages from Drive folders", to_delete.len());
+        for chunk in to_delete.chunks(100) {
+            if let Err(e) = client.delete_messages(peer, chunk).await {
+                log::warn!("Batch delete failed: {}", e);
+            }
+        }
+    }
+
+    Ok(())
 }
 
 fn add_node_to_tree(
@@ -1125,7 +1216,15 @@ pub async fn cmd_delete_file(
     // Drives: check tree first for folder IDs
     if folder_id.is_some() {
         if let Ok(Some(mut tree)) = read_tree(&client, &peer).await {
-            if remove_node_return(&mut tree, message_id).is_some() {
+            if let Some(node) = remove_node_return(&mut tree, message_id) {
+                // IT IS A FOLDER IN A DRIVE
+                // 1. Collect all folder IDs in this subtree
+                let mut folder_ids = HashSet::new();
+                collect_folder_ids_recursive(&node, &mut folder_ids);
+
+                // 2. Find and delete all messages in these folders
+                delete_drive_messages_for_folders(&client, &peer, folder_ids).await?;
+
                 write_tree(&client, &peer, &tree).await?;
                 return Ok(true);
             }
@@ -1134,6 +1233,32 @@ pub async fn cmd_delete_file(
 
     // File or Saved Messages folder: use message-based deletion
     let msg_id_i32 = message_id as i32;
+
+    // Check if this is a folder (Saved Messages or legacy Drive folder)
+    if let Some(msg) = client
+        .get_messages_by_id(&peer, &[msg_id_i32])
+        .await
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .flatten()
+        .next()
+    {
+        if parse_virtual_folder_meta(msg.text()).is_some() {
+            // IT IS A FOLDER
+            // 1. Collect all descendant IDs (including the folder itself)
+            let to_delete = get_all_descendant_virtual_ids(&client, &peer, message_id).await?;
+
+            // 2. Delete all collected message IDs
+            if !to_delete.is_empty() {
+                for chunk in to_delete.chunks(100) {
+                    let _ = client.delete_messages(&peer, chunk).await;
+                }
+            }
+            return Ok(true);
+        }
+    }
+
+    // Just a regular file
     client
         .delete_messages(&peer, &[msg_id_i32])
         .await
