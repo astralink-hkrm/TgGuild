@@ -1153,6 +1153,7 @@ pub async fn cmd_download_file(
     bw_state: State<'_, BandwidthManager>,
 ) -> Result<String, String> {
     let tid = transfer_id.unwrap_or_default();
+    let _start = std::time::Instant::now();
     log::info!(
         "[cmd_download_file] Start: message_id={}, save_path={}, folder_id={:?}, transfer_id={}",
         message_id,
@@ -1268,8 +1269,18 @@ pub async fn cmd_download_file(
     let mut downloaded: u64 = 0;
     let mut last_emit_time = std::time::Instant::now();
     let mut last_emit_bytes: u64 = 0;
+    let mut chunk_count: u64 = 0;
+    let mut total_chunk_body_duration = std::time::Duration::ZERO;
+    let mut min_chunk_body_duration = std::time::Duration::MAX;
+    let mut max_chunk_body_duration = std::time::Duration::ZERO;
+    let mut first_chunk_received = false;
+    let mut first_chunk_latency = std::time::Duration::ZERO;
+    let mut last_chunk_size: usize = 0;
+    let download_loop_start = std::time::Instant::now();
 
     while let Some(chunk) = download_iter.next().await.transpose() {
+        let chunk_start = std::time::Instant::now();
+
         // Check cancellation
         if state.cancelled_transfers.read().await.contains(&tid) {
             log::info!("[cmd_download_file] Transfer cancelled for id: {}", tid);
@@ -1287,7 +1298,33 @@ pub async fn cmd_download_file(
             log::error!("[cmd_download_file] File write error: {}", e);
             e.to_string()
         })?;
-        downloaded += bytes.len() as u64;
+        let chunk_size = bytes.len();
+        downloaded += chunk_size as u64;
+        chunk_count += 1;
+        last_chunk_size = chunk_size;
+        let chunk_body_elapsed = chunk_start.elapsed();
+        total_chunk_body_duration += chunk_body_elapsed;
+        if chunk_body_elapsed < min_chunk_body_duration {
+            min_chunk_body_duration = chunk_body_elapsed;
+        }
+        if chunk_body_elapsed > max_chunk_body_duration {
+            max_chunk_body_duration = chunk_body_elapsed;
+        }
+        if !first_chunk_received {
+            first_chunk_received = true;
+            first_chunk_latency = download_loop_start.elapsed();
+        }
+
+        // Log sample every 50 chunks to see timing distribution
+        if chunk_count % 50 == 0 {
+            log::info!(
+                "[cmd_download_file] Chunk sample #{}: size={} bytes, chunk_time={:.1}ms, total_downloaded={}",
+                chunk_count,
+                chunk_size,
+                chunk_body_elapsed.as_secs_f64() * 1000.0,
+                downloaded,
+            );
+        }
 
         // Time-based progress emission (every 250ms)
         if !tid.is_empty() {
@@ -1320,9 +1357,93 @@ pub async fn cmd_download_file(
         }
     }
 
+    let elapsed = _start.elapsed();
+    let disk_size = std::fs::metadata(&save_path).ok().map(|m| m.len());
+    let elapsed_secs = elapsed.as_secs_f64();
+    let avg_speed_mbps = if elapsed_secs > 0.0 {
+        (downloaded as f64 / elapsed_secs) / (1024.0 * 1024.0)
+    } else {
+        0.0
+    };
+    let avg_chunk_ms = if chunk_count > 0 {
+        (total_chunk_body_duration.as_secs_f64() * 1000.0) / chunk_count as f64
+    } else {
+        0.0
+    };
+    let first_chunk_ms = first_chunk_latency.as_secs_f64() * 1000.0;
+    let min_chunk_ms = min_chunk_body_duration.as_secs_f64() * 1000.0;
+    let max_chunk_ms = max_chunk_body_duration.as_secs_f64() * 1000.0;
+    let last_chunk_kb = last_chunk_size as f64 / 1024.0;
+
+    // Derived diagnostics
+    // total_chunk_body_duration = time spent inside loop body (map_err + write_all + bookkeeping)
+    // elapsed - pre_loop_time - total_chunk_body_duration = time spent waiting on next().await (network)
+    // where pre_loop_time = first_chunk_latency - (time for body of first chunk)
+    let network_wait = elapsed.checked_sub(total_chunk_body_duration).unwrap_or(std::time::Duration::ZERO);
+    let network_wait_ms = network_wait.as_secs_f64() * 1000.0;
+    let network_wait_pct = if elapsed_secs > 0.0 {
+        (network_wait.as_secs_f64() / elapsed_secs) * 100.0
+    } else {
+        0.0
+    };
+
+    // Estimate: if min_chunk_time represents "best case" (no congestion), then excess over min is latency overhead
+    // latency_overhead_per_chunk = avg_chunk_ms - min_chunk_ms
+    let latency_overhead_ms = avg_chunk_ms - min_chunk_ms;
+    let latency_overhead_pct = if avg_chunk_ms > 0.0 {
+        (latency_overhead_ms / avg_chunk_ms) * 100.0
+    } else {
+        0.0
+    };
+    let estimated_rtt_ms = first_chunk_ms - (min_chunk_ms.min(first_chunk_ms) * 0.5);
+    let bottleneck = if latency_overhead_pct > 50.0 {
+        "LATENCY-DOMINATED"
+    } else if avg_chunk_ms > 200.0 && avg_chunk_ms < 500.0 {
+        "MIXED (latency + bandwidth)"
+    } else if avg_speed_mbps < 2.0 {
+        "BANDWIDTH-LIMITED"
+    } else {
+        "UNKNOWN"
+    };
+
     log::info!(
-        "[cmd_download_file] Download completed successfully: {} bytes",
-        downloaded
+        "[Download Analysis] message_id={} \
+        | file_size={} bytes ({:.2} MB) \
+        | downloaded={} bytes \
+        | chunk_size=512 KB (grammers default) \
+        | chunks={} \
+        | last_chunk={:.1} KB \
+        | duration={:.2} s \
+        | avg_speed={:.2} MB/s \
+        | avg_chunk_time={:.1} ms \
+        | min_chunk_time={:.1} ms \
+        | max_chunk_time={:.1} ms \
+        | first_chunk_latency={:.1} ms \
+        | network_wait={:.1} ms ({:.1}%) \
+        | latency_overhead_est={:.1} ms/chunk ({:.1}%) \
+        | estimated_rtt={:.1} ms \
+        | bottleneck={} \
+        | disk_size={:?} \
+        | mode=sequential",
+        message_id,
+        total_size,
+        total_size as f64 / (1024.0 * 1024.0),
+        downloaded,
+        chunk_count,
+        last_chunk_kb,
+        elapsed_secs,
+        avg_speed_mbps,
+        avg_chunk_ms,
+        min_chunk_ms,
+        max_chunk_ms,
+        first_chunk_ms,
+        network_wait_ms,
+        network_wait_pct,
+        latency_overhead_ms,
+        latency_overhead_pct,
+        estimated_rtt_ms,
+        bottleneck,
+        disk_size,
     );
     bw_state.add_down(total_size);
 

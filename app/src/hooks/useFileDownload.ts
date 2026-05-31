@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { tempDir, join } from '@tauri-apps/api/path';
 import { save, open } from '@tauri-apps/plugin-dialog';
 import { openPath } from '@tauri-apps/plugin-opener';
+import { exists, stat } from '@tauri-apps/plugin-fs';
 import { listen, UnlistenFn } from '@tauri-apps/api/event';
 import { toast } from 'sonner';
 import { DownloadItem, TelegramFile } from '../types';
@@ -21,6 +22,7 @@ export function useFileDownload(store: Store | null) {
     const [processing, setProcessing] = useState(false);
     const [initialized, setInitialized] = useState(false);
     const cancelledRef = useRef<Set<string>>(new Set());
+    const pendingOpensRef = useRef<Set<number>>(new Set());
 
     // Listen for progress events from Rust
     useEffect(() => {
@@ -202,21 +204,67 @@ export function useFileDownload(store: Store | null) {
     };
 
     const openWithSystemApp = async (messageId: number, filename: string, folderId: number | null) => {
+        if (pendingOpensRef.current.has(messageId)) {
+            console.log(`[useFileDownload] Ignoring duplicate open for messageId=${messageId}`);
+            return;
+        }
+        pendingOpensRef.current.add(messageId);
+
+        const t0 = performance.now();
+        console.log(`[Timing] User clicked Open: messageId=${messageId}, filename="${filename}", folderId=${folderId}`);
         toast.info(`Opening ${filename}...`);
+        let downloadMs = 0;
         try {
             const tempDirPath = await tempDir();
-            const tempPath = await join(tempDirPath, filename);
+            const tempPath = await join(tempDirPath, `${messageId}_${filename}`);
 
-            await invoke('cmd_download_file', {
-                messageId,
-                savePath: tempPath,
-                folderId,
-            });
+            let fileReady = false;
+            try {
+                fileReady = await exists(tempPath);
+                if (fileReady) {
+                    const meta = await stat(tempPath);
+                    if (meta.size === 0) fileReady = false;
+                }
+            } catch {
+                fileReady = false;
+            }
+
+            if (fileReady) {
+                console.log(`[Timing] File already cached, skipping download: ${tempPath}`);
+            } else {
+                const t1 = performance.now();
+                console.log(`[Timing] Download started: elapsed=${(t1 - t0).toFixed(1)}ms`);
+
+                const transferId = `open_${messageId}_${Date.now()}`;
+                await invoke('cmd_download_file', {
+                    messageId,
+                    savePath: tempPath,
+                    folderId,
+                    transferId,
+                });
+
+                const t2 = performance.now();
+                downloadMs = t2 - t1;
+                console.log(`[Timing] Download completed: elapsed=${(t2 - t0).toFixed(1)}ms, duration=${downloadMs.toFixed(1)}ms`);
+            }
+
+            const t3 = performance.now();
+            console.log(`[Timing] openPath invoked: elapsed=${(t3 - t0).toFixed(1)}ms`);
 
             await openPath(tempPath);
+
+            const t4 = performance.now();
+            console.log(`[Timing] openPath returned: elapsed=${(t4 - t0).toFixed(1)}ms, duration=${(t4 - t3).toFixed(1)}ms`);
+            console.log(`[Timing] === Summary for "${filename}" ===`);
+            console.log(`[Timing]   Download: ${fileReady ? 'cached (0ms)' : `${downloadMs.toFixed(1)}ms`}`);
+            console.log(`[Timing]   openPath: ${(t4 - t3).toFixed(1)}ms`);
+            console.log(`[Timing]   Total: ${(t4 - t0).toFixed(1)}ms`);
+
             toast.success(`Opened ${filename}`);
         } catch (e) {
             toast.error(`Failed to open ${filename}: ${e}`);
+        } finally {
+            pendingOpensRef.current.delete(messageId);
         }
     };
 
