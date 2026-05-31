@@ -568,7 +568,7 @@ export function Dashboard({ onLogout }: { onLogout: () => void }) {
                                 onClick={() => handleVirtualBreadcrumb(-1)}
                                 className={`rounded px-2 py-1 transition-colors hover:bg-telegram-hover hover:text-telegram-text ${activeVirtualFolderId === null ? 'text-telegram-primary' : ''}`}
                             >
-                                {currentFolderName}
+                                {driveName}
                             </button>
                             {virtualFolderStack.map((folder, index) => (
                                 <span key={folder.id} className="flex items-center gap-2">
