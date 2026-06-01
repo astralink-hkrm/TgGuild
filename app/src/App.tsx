@@ -5,6 +5,7 @@ import { load } from "@tauri-apps/plugin-store";
 import { AuthWizard } from "./components/AuthWizard";
 import { Dashboard } from "./components/Dashboard";
 import { ErrorBoundary } from "./components/ErrorBoundary";
+import { WindowControls } from "./components/WindowControls";
 import { motion, AnimatePresence } from "framer-motion";
 import "./App.css";
 
@@ -17,7 +18,7 @@ const queryClient = new QueryClient();
 
 function LoadingScreen() {
   return (
-    <div className="h-screen w-screen auth-gradient flex flex-col items-center justify-center relative overflow-hidden">
+    <div className="h-full w-full auth-gradient flex flex-col items-center justify-center relative overflow-hidden">
       <motion.div
         initial={{ opacity: 0, scale: 0.8 }}
         animate={{ opacity: 1, scale: 1 }}
@@ -92,36 +93,49 @@ function AppContent() {
     checkAuth();
   }, []);
 
-  if (isCheckingAuth) {
-    return <LoadingScreen />;
-  }
-
   return (
-    <main className="h-screen w-screen text-telegram-text overflow-hidden selection:bg-telegram-primary/30 relative">
-      <Toaster theme={theme} position="bottom-center" />
-      <AnimatePresence mode="wait">
-        {isAuthenticated ? (
-          <motion.div
-            key="dashboard"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="h-full w-full"
-          >
-            <Dashboard onLogout={() => setIsAuthenticated(false)} />
-          </motion.div>
-        ) : (
-          <motion.div
-            key="auth"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="h-full w-full"
-          >
-            <AuthWizard onLogin={() => setIsAuthenticated(true)} />
-          </motion.div>
-        )}
-      </AnimatePresence>
+    <main className="h-screen w-screen text-telegram-text overflow-hidden selection:bg-telegram-primary/30 relative flex flex-col bg-telegram-bg">
+      <div className="h-8 flex justify-end items-center shrink-0 z-[10000]">
+        <div data-tauri-drag-region className="flex-1 h-full" />
+        <WindowControls />
+      </div>
+
+      <div className="flex-1 relative overflow-hidden">
+        <Toaster theme={theme} position="bottom-center" />
+        <AnimatePresence mode="wait">
+          {isCheckingAuth ? (
+            <motion.div
+              key="loading"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="h-full w-full"
+            >
+              <LoadingScreen />
+            </motion.div>
+          ) : isAuthenticated ? (
+            <motion.div
+              key="dashboard"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="h-full w-full"
+            >
+              <Dashboard onLogout={() => setIsAuthenticated(false)} />
+            </motion.div>
+          ) : (
+            <motion.div
+              key="auth"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="h-full w-full"
+            >
+              <AuthWizard onLogin={() => setIsAuthenticated(true)} />
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
     </main>
   );
 }

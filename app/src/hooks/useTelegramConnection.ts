@@ -185,7 +185,7 @@ export function useTelegramConnection(onLogoutParent: () => void) {
         if (!store) return;
         setIsSyncing(true);
         try {
-            await refreshFoldersFromTelegram(store, folders, true, true);
+            await refreshFoldersFromTelegram(store, folders, true);
         } catch {
             toast.error("Sync failed");
         } finally {

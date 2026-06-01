@@ -502,6 +502,7 @@ export function TeamsPanel({ onGroupCreated }: TeamsPanelProps) {
                 <TeamVisibilityModal
                     teams={teams}
                     contacts={contacts}
+                    drives={[]}
                     settings={teamVisibility}
                     streamToken={streamToken}
                     onClose={() => setShowVisibilitySettings(false)}

@@ -521,7 +521,7 @@ export function Sidebar({
                 <TeamVisibilityModal
                     teams={groups}
                     contacts={contacts}
-                    drives={folders.map(f => ({ id: f.id, name: f.name, username: null, member_count: f.member_count }))}
+                    drives={folders.map(f => ({ id: f.id, name: f.name, username: null, member_count: f.member_count ?? 0 }))}
                     settings={teamVisibility}
                     streamToken={streamToken}
                     onClose={() => setShowVisibilitySettings(false)}
