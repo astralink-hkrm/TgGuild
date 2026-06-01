@@ -40,11 +40,11 @@ export function WindowControls() {
     };
 
     return (
-        <div className="flex items-center h-full relative z-[10001]">
+        <div className="flex h-full shrink-0 items-center relative z-[10001]">
             <button
                 type="button"
                 onClick={handleMinimize}
-                className="w-10 h-8 flex items-center justify-center hover:bg-telegram-hover text-telegram-text transition-colors cursor-pointer"
+                className="w-10 h-10 flex items-center justify-center hover:bg-telegram-hover text-telegram-text transition-colors cursor-pointer"
                 title="Minimize"
             >
                 <Minus className="w-4 h-4" />
@@ -52,7 +52,7 @@ export function WindowControls() {
             <button
                 type="button"
                 onClick={handleMaximize}
-                className="w-10 h-8 flex items-center justify-center hover:bg-telegram-hover text-telegram-text transition-colors cursor-pointer"
+                className="w-10 h-10 flex items-center justify-center hover:bg-telegram-hover text-telegram-text transition-colors cursor-pointer"
                 title={isMaximized ? "Restore" : "Maximize"}
             >
                 {isMaximized ? (
@@ -64,7 +64,7 @@ export function WindowControls() {
             <button
                 type="button"
                 onClick={handleClose}
-                className="w-10 h-8 flex items-center justify-center hover:bg-red-500 hover:text-white text-telegram-text transition-colors cursor-pointer"
+                className="w-10 h-10 flex items-center justify-center hover:bg-red-500 hover:text-white text-telegram-text transition-colors cursor-pointer"
                 title="Close"
             >
                 <X className="w-4 h-4" />

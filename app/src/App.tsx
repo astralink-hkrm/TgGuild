@@ -95,12 +95,15 @@ function AppContent() {
 
   return (
     <main className="h-screen w-screen text-telegram-text overflow-hidden selection:bg-telegram-primary/30 relative flex flex-col bg-telegram-bg">
-      <div className="h-8 flex justify-end items-center shrink-0 z-[10000]">
-        <div data-tauri-drag-region className="flex-1 h-full" />
+      <div
+        data-tauri-drag-region
+        className="h-10 shrink-0 flex items-center justify-end border-b border-[#1f1f1f] bg-[#050505] select-none relative z-[10000]"
+      >
+        <div data-tauri-drag-region className="min-w-0 flex-1 h-full" />
         <WindowControls />
       </div>
 
-      <div className="flex-1 relative overflow-hidden">
+      <div className="min-h-0 flex-1 relative overflow-hidden">
         <Toaster theme={theme} position="bottom-center" />
         <AnimatePresence mode="wait">
           {isCheckingAuth ? (
