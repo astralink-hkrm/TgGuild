@@ -13,39 +13,23 @@ function findFolderInTree(nodes: FolderTreeNode[], id: number): FolderTreeNode |
     return null;
 }
 
+interface DownloadEntry {
+    file: TelegramFile;
+    relativePath: string;
+    isDirectory?: boolean;
+}
+
 export function useFileOperations(
     activeFolderId: number | null,
     activeVirtualFolderId: number | null,
     selectedIds: number[],
     setSelectedIds: (ids: number[]) => void,
     displayedFiles: TelegramFile[],
-    currentFolderName: string
+    currentFolderName: string,
+    queueBulkDownload?: (entries: DownloadEntry[], folderId: number | null, currentFolderName: string) => Promise<void>,
 ) {
     const queryClient = useQueryClient();
     const { confirm } = useConfirm();
-
-    const makePathUnique = async (path: string): Promise<string> => {
-        try {
-            const exists = await invoke<boolean>('cmd_file_exists', { path });
-            if (!exists) return path;
-
-            const extIndex = path.lastIndexOf('.');
-            const base = extIndex !== -1 ? path.substring(0, extIndex) : path;
-            const ext = extIndex !== -1 ? path.substring(extIndex) : '';
-
-            let counter = 1;
-            while (true) {
-                const newPath = `${base} (${counter})${ext}`;
-                const stillExists = await invoke<boolean>('cmd_file_exists', { path: newPath });
-                if (!stillExists) return newPath;
-                counter++;
-                if (counter > 100) return newPath; // Safety break
-            }
-        } catch (e) {
-            console.error('Error checking file existence:', e);
-            return path;
-        }
-    };
 
     const invalidateCurrent = () => {
         queryClient.invalidateQueries({ queryKey: ['files', activeFolderId, activeVirtualFolderId] });
@@ -73,16 +57,6 @@ export function useFileOperations(
         } catch (e) {
             toast.error(`Rename failed: ${e}`);
         }
-    };
-
-    const getSubfolderIds = async (virtualFolderId: number): Promise<number[]> => {
-        if (activeFolderId !== null) {
-            const tree = await invoke<FolderTreeNode[]>('cmd_get_folder_tree', { folderId: activeFolderId });
-            const node = findFolderInTree(tree, virtualFolderId);
-            return node ? node.children.map(c => c.id) : [];
-        }
-        const contents = await invoke<any[]>('cmd_get_files', { folderId: activeFolderId, virtualFolderId });
-        return contents.filter((f: any) => f.icon_type === 'folder' || f.name.endsWith('/')).map((f: any) => f.id);
     };
 
     const getSubfolderNodes = async (virtualFolderId: number): Promise<FolderTreeNode[]> => {
@@ -119,139 +93,39 @@ export function useFileOperations(
         if (fail > 0) toast.error(`Failed to delete ${fail} files.`);
     }
 
-    const handleDownload = async (id: number, name: string) => {
-        try {
-            const savePath = await import('@tauri-apps/plugin-dialog').then(d => d.save({ defaultPath: name }));
-            if (!savePath) return;
-            toast.info(`Download started: ${name}`);
-            await invoke('cmd_download_file', { messageId: id, savePath, folderId: activeFolderId });
-            toast.success(`Download complete: ${name}`);
-        } catch (e) {
-            toast.error(`Download failed: ${e}`);
-        }
-    }
+    const collectFolderFiles = async (
+        folder: TelegramFile,
+        parentRelativePath: string,
+    ): Promise<DownloadEntry[]> => {
+        const entries: DownloadEntry[] = [];
 
-    const handleBulkDownload = async () => {
-        if (selectedIds.length === 0) return;
+        // Ensure the folder itself is created on disk, even if empty
+        entries.push({ file: folder, relativePath: parentRelativePath, isDirectory: true });
 
-        try {
-            const dirPath = await import('@tauri-apps/plugin-dialog').then(d => d.open({
-                directory: true, multiple: false, title: "Select Download Destination"
-            }));
-            if (!dirPath) return;
-
-            // Create root hierarchy container to preserve structure
-            const sanitizedRootName = currentFolderName.replace(/[<>:"/\\|?*]/g, '_');
-            const rootDirPath = `${dirPath}/${sanitizedRootName}`;
-
-            // Ensure the root container directory exists
-            await invoke('cmd_create_dir', { path: rootDirPath });
-
-            const itemsToDownload = displayedFiles.filter((f) => selectedIds.includes(f.current_id ?? f.id));
-            const files = itemsToDownload.filter(f => f.type !== 'folder');
-            const folders = itemsToDownload.filter(f => f.type === 'folder');
-
-            let totalFiles = files.length;
-            let downloadedCount = 0;
-
-            for (const folder of folders) {
-                const count = await countFilesInFolder(folder.id);
-                totalFiles += count;
-            }
-
-            toast.info(`Starting download of ${totalFiles} file(s)...`);
-
-            for (const file of files) {
-                let filePath = `${rootDirPath}/${file.name}`;
-                filePath = await makePathUnique(filePath);
-                const messageId = file.current_id ?? file.id;
-                try {
-                    toast.info(`Downloading: ${file.name}`, { duration: 1000 });
-                    await invoke('cmd_download_file', { messageId, savePath: filePath, folderId: activeFolderId });
-                    downloadedCount++;
-                } catch (e) {
-                    const errorStr = String(e);
-                    if (!errorStr.includes('No media in message')) {
-                        console.error(`Failed to download ${file.name}:`, e);
-                    }
-                }
-            }
-
-            for (const folder of folders) {
-                const folderPath = `${rootDirPath}/${folder.name.replace('/', '')}`;
-                const count = await downloadFolderRecursively(folder, folderPath, activeFolderId);
-                downloadedCount += count;
-            }
-
-            toast.success(`Downloaded ${downloadedCount} of ${totalFiles} file(s).`);
-            setSelectedIds([]);
-        } catch (e) {
-            toast.error(`Bulk download failed: ${e}`);
-        }
-    };
-
-    const countFilesInFolder = async (virtualFolderId: number): Promise<number> => {
         try {
             const contents = await invoke<any[]>('cmd_get_files', {
                 folderId: activeFolderId,
-                virtualFolderId
+                virtualFolderId: folder.id,
             });
-            const files = contents.filter((f: any) => f.icon_type !== 'folder' && !f.name.endsWith('/'));
-            let count = files.length;
-
-            const subIds = await getSubfolderIds(virtualFolderId);
-            for (const subId of subIds) {
-                count += await countFilesInFolder(subId);
-            }
-
-            return count;
-        } catch (e) {
-            console.error('Failed to count files:', e);
-            return 0;
-        }
-    };
-
-    const downloadFolderRecursively = async (
-        folder: TelegramFile,
-        folderPath: string,
-        folderId: number | null
-    ): Promise<number> => {
-        let downloadedCount = 0;
-
-        try {
-            // Ensure local directory exists immediately, even if folder is empty
-            await invoke('cmd_create_dir', { path: folderPath });
-
-            const contents = await invoke<any[]>('cmd_get_files', {
-                folderId,
-                virtualFolderId: folder.id
-            });
-
-            const files = contents.filter((f: any) => f.icon_type !== 'folder' && !f.name.endsWith('/'));
-
-            for (const file of files) {
-                let filePath = `${folderPath}/${file.name}`;
-                filePath = await makePathUnique(filePath);
-                try {
-                    const displayPath = folderPath.split('/').slice(-2).join('/') + '/' + file.name;
-                    toast.info(`Downloading: ${displayPath}`, { duration: 1000 });
-                    await invoke('cmd_download_file', {
-                        messageId: file.current_id ?? file.id,
-                        savePath: filePath,
-                        folderId
-                    });
-                    downloadedCount++;
-                } catch (e) {
-                    const errorStr = String(e);
-                    if (!errorStr.includes('No media in message')) {
-                        console.error(`Failed to download ${file.name}:`, e);
-                    }
-                }
+            const files = contents.filter(
+                (f: any) => f.icon_type !== 'folder' && !f.name.endsWith('/')
+            );
+            for (const f of files) {
+                entries.push({
+                    file: {
+                        id: f.id,
+                        name: f.name,
+                        size: f.size || 0,
+                        sizeStr: '',
+                        current_id: f.current_id ?? f.id,
+                        type: 'file',
+                    } as TelegramFile,
+                    relativePath: `${parentRelativePath}/${f.name}`,
+                });
             }
 
             const children = await getSubfolderNodes(folder.id);
             for (const child of children) {
-                const subFolderPath = `${folderPath}/${child.name}`;
                 const childFolder: TelegramFile = {
                     id: child.id,
                     name: child.name,
@@ -260,14 +134,36 @@ export function useFileOperations(
                     sizeStr: '0 B',
                     current_id: child.id,
                 };
-                const count = await downloadFolderRecursively(childFolder, subFolderPath, folderId);
-                downloadedCount += count;
+                const childEntries = await collectFolderFiles(
+                    childFolder,
+                    `${parentRelativePath}/${child.name}`,
+                );
+                entries.push(...childEntries);
             }
-
-            return downloadedCount;
         } catch (e) {
-            console.error(`Failed to download folder ${folder.name}:`, e);
-            return downloadedCount;
+            console.error(`Failed to collect folder ${folder.name}:`, e);
+        }
+        return entries;
+    };
+
+    const handleBulkDownload = async () => {
+        if (selectedIds.length === 0) return;
+
+        const itemsToDownload = displayedFiles.filter((f) => selectedIds.includes(f.current_id ?? f.id));
+        const flatEntries: DownloadEntry[] = [];
+
+        for (const item of itemsToDownload) {
+            if (item.type !== 'folder') {
+                flatEntries.push({ file: item, relativePath: item.name });
+            } else {
+                const folderEntries = await collectFolderFiles(item, item.name);
+                flatEntries.push(...folderEntries);
+            }
+        }
+
+        if (queueBulkDownload && flatEntries.length > 0) {
+            await queueBulkDownload(flatEntries, activeFolderId, currentFolderName);
+            setSelectedIds([]);
         }
     };
 
@@ -463,36 +359,20 @@ export function useFileOperations(
             toast.info("Folder is empty.");
             return;
         }
-        try {
-            const dirPath = await import('@tauri-apps/plugin-dialog').then(d => d.open({
-                directory: true, multiple: false, title: "Download Folder To..."
-            }));
-            if (!dirPath) return;
 
-            const filesToDownload = displayedFiles.filter(f => f.type !== 'folder');
-            if (filesToDownload.length === 0) {
-                toast.info("No files to download in this folder.");
-                return;
-            }
+        const flatEntries: DownloadEntry[] = [];
 
-            let successCount = 0;
-            toast.info(`Downloading folder contents (${filesToDownload.length} files)...`);
-            for (const file of filesToDownload) {
-                const filePath = `${dirPath}/${file.name}`;
-                try {
-                    await invoke('cmd_download_file', {
-                        messageId: file.current_id ?? file.id,
-                        savePath: filePath,
-                        folderId: activeFolderId
-                    });
-                    successCount++;
-                } catch (e) {
-                    console.error(`Failed to download ${file.name}:`, e);
-                }
+        for (const item of displayedFiles) {
+            if (item.type !== 'folder') {
+                flatEntries.push({ file: item, relativePath: item.name });
+            } else {
+                const folderEntries = await collectFolderFiles(item, item.name);
+                flatEntries.push(...folderEntries);
             }
-            toast.success(`Folder Download Complete: ${successCount} files.`);
-        } catch (e) {
-            toast.error("Error: " + e);
+        }
+
+        if (queueBulkDownload) {
+            await queueBulkDownload(flatEntries, activeFolderId, currentFolderName);
         }
     }
 
@@ -500,7 +380,6 @@ export function useFileOperations(
         handleDelete,
         handleRename,
         handleBulkDelete,
-        handleDownload,
         handleBulkDownload,
         handleBulkMove,
         handleDownloadFolder,

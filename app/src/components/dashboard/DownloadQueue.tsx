@@ -1,6 +1,7 @@
 import { memo } from 'react';
-import { DownloadItem } from "../../types";
+import { DownloadItem, BatchDownload } from "../../types";
 import { Download, Check, X, AlertCircle, RotateCcw } from "lucide-react";
+import { BatchDownloadCard } from "./BatchDownloadCard";
 
 function formatBytes(bytes: number): string {
     if (bytes === 0) return '0 B';
@@ -10,19 +11,40 @@ function formatBytes(bytes: number): string {
     return `${(bytes / Math.pow(k, i)).toFixed(1)} ${sizes[i]}`;
 }
 
+interface BatchAggregate {
+    percent: number;
+    completed: number;
+    failed: number;
+    active: number;
+    totalBytes: number;
+    uploadedBytes: number;
+    speedBytesPerSec: number;
+    total: number;
+}
+
 interface DownloadQueueProps {
     items: DownloadItem[];
+    batches: BatchDownload[];
+    batchAggregates: Record<string, BatchAggregate>;
     onClearFinished: () => void;
     onCancelAll: () => void;
     onCancelItem: (id: string) => void;
     onRetryItem: (id: string) => void;
+    onCancelBatch: (batchId: string) => void;
+    onToggleBatchExpand: (batchId: string) => void;
 }
 
-export const DownloadQueue = memo(function DownloadQueue({ items, onClearFinished, onCancelAll, onCancelItem, onRetryItem }: DownloadQueueProps) {
-    if (items.length === 0) return null;
+export const DownloadQueue = memo(function DownloadQueue({
+    items, batches, batchAggregates, onClearFinished, onCancelAll,
+    onCancelItem, onRetryItem, onCancelBatch, onToggleBatchExpand,
+}: DownloadQueueProps) {
+    if (items.length === 0 && batches.length === 0) return null;
 
-    const activeCount = items.filter(i => i.status === 'pending' || i.status === 'downloading').length;
-    const completedCount = items.filter(i => i.status === 'success').length;
+    const singleActiveCount = items.filter(i => i.status === 'pending' || i.status === 'downloading').length;
+    const batchActiveCount = batches.filter(b => b.status === 'downloading').length;
+    const activeCount = singleActiveCount + batchActiveCount;
+    const hasSingleFinished = items.some(i => i.status === 'success');
+    const hasBatchFinished = batches.some(b => b.status === 'completed' || b.status === 'cancelled');
 
     return (
         <div className="w-80 bg-telegram-surface border border-telegram-border rounded-xl shadow-2xl overflow-hidden">
@@ -40,7 +62,7 @@ export const DownloadQueue = memo(function DownloadQueue({ items, onClearFinishe
                     {activeCount > 0 && (
                         <button onClick={onCancelAll} className="text-xs text-red-400 hover:text-red-300 transition-colors">Cancel All</button>
                     )}
-                    {completedCount > 0 && (
+                    {(hasSingleFinished || hasBatchFinished) && (
                         <button onClick={onClearFinished} className="text-xs text-telegram-primary hover:text-telegram-text transition-colors">
                             Clear Finished
                         </button>
@@ -48,6 +70,21 @@ export const DownloadQueue = memo(function DownloadQueue({ items, onClearFinishe
                 </div>
             </div>
             <div className="max-h-60 overflow-y-auto p-2 space-y-2">
+                {batches.map(batch => {
+                    const agg = batchAggregates[batch.batchId];
+                    if (!agg) return null;
+                    return (
+                        <BatchDownloadCard
+                            key={batch.batchId}
+                            batch={batch}
+                            aggregate={agg}
+                            onCancelBatch={onCancelBatch}
+                            onToggleExpand={onToggleBatchExpand}
+                            onCancelItem={onCancelItem}
+                            onRetryItem={onRetryItem}
+                        />
+                    );
+                })}
                 {items.map(item => (
                     <div key={item.id} className="flex flex-col gap-1 p-2 bg-telegram-hover rounded">
                         <div className="flex items-center gap-3 text-sm">

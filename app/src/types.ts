@@ -41,6 +41,8 @@ export interface BandwidthStats {
 
 export interface DownloadItem {
     id: string;
+    batchId?: string;
+    targetPath?: string;
     messageId: number;
     filename: string;
     folderId: number | null;
@@ -50,6 +52,17 @@ export interface DownloadItem {
     uploadedBytes?: number;
     totalBytes?: number;
     speedBytesPerSec?: number;
+}
+
+export interface BatchDownload {
+    batchId: string;
+    dirPath: string;
+    folderName: string;
+    items: DownloadItem[];
+    status: 'downloading' | 'completed' | 'cancelled' | 'error';
+    expanded: boolean;
+    errorCount: number;
+    startedAt: number;
 }
 
 export interface OpeningProgress {

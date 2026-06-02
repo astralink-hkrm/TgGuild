@@ -225,18 +225,27 @@ export function Dashboard({ onLogout }: { onLogout: () => void }) {
         return virtualFolderStack[virtualFolderStack.length - 1]?.name || "Folder";
     }, [activeVirtualFolderId, activeFolderId, folders, virtualFolderStack]);
 
+    const { uploadQueue, setUploadQueue, handleManualUpload, cancelAll: cancelUploads, cancelItem: cancelUploadItem, retryItem: retryUploadItem, isDragging } = useFileUpload(activeFolderId, store, activeVirtualFolderId);
+    const {
+        downloadQueue, batchDownloads, calcBatchAggregate,
+        queueDownload, queueBulkDownload, clearFinished: clearDownloads,
+        cancelAll: cancelDownloads, cancelItem: cancelDownloadItem,
+        retryItem: retryDownloadItem, cancelBatch, toggleBatchExpand,
+        openWithSystemApp, openingProgress, cancelOpening, retryOpening,
+    } = useFileDownload(store);
+
     const {
         handleDelete, handleRename, handleBulkDelete, handleBulkDownload,
         handleBulkMove, handleGlobalSearch
-    } = useFileOperations(activeFolderId, activeVirtualFolderId, selectedIds, setSelectedIds, displayedFiles, currentFolderName);
+    } = useFileOperations(activeFolderId, activeVirtualFolderId, selectedIds, setSelectedIds, displayedFiles, currentFolderName, queueBulkDownload);
 
-    const { uploadQueue, setUploadQueue, handleManualUpload, cancelAll: cancelUploads, cancelItem: cancelUploadItem, retryItem: retryUploadItem, isDragging } = useFileUpload(activeFolderId, store, activeVirtualFolderId);
-    const {
-        downloadQueue, queueDownload, clearFinished: clearDownloads,
-        cancelAll: cancelDownloads, cancelItem: cancelDownloadItem,
-        retryItem: retryDownloadItem, openWithSystemApp,
-        openingProgress, cancelOpening, retryOpening,
-    } = useFileDownload(store);
+    const batchAggregates = useMemo(() => {
+        const map: Record<string, ReturnType<typeof calcBatchAggregate>> = {};
+        for (const batch of batchDownloads) {
+            map[batch.batchId] = calcBatchAggregate(batch.items);
+        }
+        return map;
+    }, [batchDownloads, calcBatchAggregate]);
 
     const handleSelectAll = useCallback(() => {
         const visibleIds = displayedFiles.map((f: TelegramFile) => f.current_id ?? f.id);
@@ -652,10 +661,14 @@ export function Dashboard({ onLogout }: { onLogout: () => void }) {
                 />
                 <DownloadQueue
                     items={downloadQueue}
+                    batches={batchDownloads}
+                    batchAggregates={batchAggregates}
                     onClearFinished={clearDownloads}
                     onCancelAll={cancelDownloads}
                     onCancelItem={cancelDownloadItem}
                     onRetryItem={retryDownloadItem}
+                    onCancelBatch={cancelBatch}
+                    onToggleBatchExpand={toggleBatchExpand}
                 />
                 <OpeningOverlay
                     progress={openingProgress}
