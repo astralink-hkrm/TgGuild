@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import { DownloadItem } from "../../types";
 import { Download, Check, X, AlertCircle, RotateCcw } from "lucide-react";
 
@@ -17,14 +18,14 @@ interface DownloadQueueProps {
     onRetryItem: (id: string) => void;
 }
 
-export function DownloadQueue({ items, onClearFinished, onCancelAll, onCancelItem, onRetryItem }: DownloadQueueProps) {
+export const DownloadQueue = memo(function DownloadQueue({ items, onClearFinished, onCancelAll, onCancelItem, onRetryItem }: DownloadQueueProps) {
     if (items.length === 0) return null;
 
     const activeCount = items.filter(i => i.status === 'pending' || i.status === 'downloading').length;
     const completedCount = items.filter(i => i.status === 'success').length;
 
     return (
-        <div className="fixed bottom-4 right-4 w-80 bg-telegram-surface border border-telegram-border rounded-xl shadow-2xl overflow-hidden z-[100]">
+        <div className="w-80 bg-telegram-surface border border-telegram-border rounded-xl shadow-2xl overflow-hidden">
             <div className="p-3 border-b border-telegram-border bg-telegram-hover flex justify-between items-center">
                 <div className="flex items-center gap-2">
                     <Download className="w-4 h-4 text-telegram-secondary" />
@@ -114,4 +115,4 @@ export function DownloadQueue({ items, onClearFinished, onCancelAll, onCancelIte
             </div>
         </div>
     )
-}
+});

@@ -52,6 +52,17 @@ export interface DownloadItem {
     speedBytesPerSec?: number;
 }
 
+export interface OpeningProgress {
+    filename: string;
+    messageId: number;
+    folderId: number | null;
+    transferId: string;
+    phase: 'downloading' | 'launching' | 'error';
+    percent: number;
+    speedBytesPerSec: number;
+    error?: string;
+}
+
 export interface FolderTreeNode {
     id: number;
     name: string;

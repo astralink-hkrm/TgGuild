@@ -24,6 +24,7 @@ import { ShareFilesModal } from './dashboard/ShareFilesModal';
 import { DragDropOverlay } from './dashboard/DragDropOverlay';
 import { ExternalDropBlocker } from './dashboard/ExternalDropBlocker';
 import { CreateFolderModal } from './dashboard/CreateFolderModal';
+import { OpeningOverlay } from './dashboard/OpeningOverlay';
 
 // Hooks
 import { useTelegramConnection } from '../hooks/useTelegramConnection';
@@ -230,7 +231,12 @@ export function Dashboard({ onLogout }: { onLogout: () => void }) {
     } = useFileOperations(activeFolderId, activeVirtualFolderId, selectedIds, setSelectedIds, displayedFiles, currentFolderName);
 
     const { uploadQueue, setUploadQueue, handleManualUpload, cancelAll: cancelUploads, cancelItem: cancelUploadItem, retryItem: retryUploadItem, isDragging } = useFileUpload(activeFolderId, store, activeVirtualFolderId);
-    const { downloadQueue, queueDownload, clearFinished: clearDownloads, cancelAll: cancelDownloads, cancelItem: cancelDownloadItem, retryItem: retryDownloadItem, openWithSystemApp } = useFileDownload(store);
+    const {
+        downloadQueue, queueDownload, clearFinished: clearDownloads,
+        cancelAll: cancelDownloads, cancelItem: cancelDownloadItem,
+        retryItem: retryDownloadItem, openWithSystemApp,
+        openingProgress, cancelOpening, retryOpening,
+    } = useFileDownload(store);
 
     const handleSelectAll = useCallback(() => {
         const visibleIds = displayedFiles.map((f: TelegramFile) => f.current_id ?? f.id);
@@ -441,6 +447,7 @@ export function Dashboard({ onLogout }: { onLogout: () => void }) {
         }
     };
 
+    console.log('[PANEL_STACK]', JSON.stringify({ uploadItems: uploadQueue.length, downloadItems: downloadQueue.length, hasOpeningOverlay: openingProgress !== null, downloadStatuses: downloadQueue.map(i => i.status) }));
     return (
         <div
             className="flex h-full min-h-0 w-full overflow-hidden bg-telegram-bg relative"
@@ -635,20 +642,27 @@ export function Dashboard({ onLogout }: { onLogout: () => void }) {
                 )}
             </main>
 
-            <UploadQueue
-                items={uploadQueue}
-                onClearFinished={() => setUploadQueue(q => q.filter(i => i.status !== 'success' && i.status !== 'error' && i.status !== 'cancelled'))}
-                onCancelAll={cancelUploads}
-                onCancelItem={cancelUploadItem}
-                onRetryItem={retryUploadItem}
-            />
-            <DownloadQueue
-                items={downloadQueue}
-                onClearFinished={clearDownloads}
-                onCancelAll={cancelDownloads}
-                onCancelItem={cancelDownloadItem}
-                onRetryItem={retryDownloadItem}
-            />
+            <div className="fixed bottom-4 right-4 flex flex-col gap-2 z-[100]">
+                <UploadQueue
+                    items={uploadQueue}
+                    onClearFinished={() => setUploadQueue(q => q.filter(i => i.status !== 'success' && i.status !== 'error' && i.status !== 'cancelled'))}
+                    onCancelAll={cancelUploads}
+                    onCancelItem={cancelUploadItem}
+                    onRetryItem={retryUploadItem}
+                />
+                <DownloadQueue
+                    items={downloadQueue}
+                    onClearFinished={clearDownloads}
+                    onCancelAll={cancelDownloads}
+                    onCancelItem={cancelDownloadItem}
+                    onRetryItem={retryDownloadItem}
+                />
+                <OpeningOverlay
+                    progress={openingProgress}
+                    onCancel={cancelOpening}
+                    onRetry={retryOpening}
+                />
+            </div>
 
             {showAddSubscriber && (activeFolderId || activeGroupId) && (
                 <AddSubscriberModal

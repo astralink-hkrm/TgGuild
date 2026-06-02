@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import { LayoutGrid, Sun, Moon, Plus } from 'lucide-react';
 import { useTheme } from '../../context/ThemeContext';
 import { MemberStack } from './MemberStack';
@@ -12,7 +13,7 @@ interface TopBarProps {
     onAddSubscriber?: () => void;
 }
 
-export function TopBar({
+export const TopBar = memo(function TopBar({
     currentFolderName,
     viewMode, setViewMode, searchTerm, onSearchChange, members = [],
     onAddSubscriber
@@ -82,4 +83,4 @@ export function TopBar({
             </div>
         </header>
     )
-}
+});

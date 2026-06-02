@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import { QueueItem } from "../../types";
 import { X, RotateCcw, AlertCircle } from "lucide-react";
 
@@ -17,13 +18,13 @@ interface UploadQueueProps {
     onRetryItem: (id: string) => void;
 }
 
-export function UploadQueue({ items, onClearFinished, onCancelAll, onCancelItem, onRetryItem }: UploadQueueProps) {
+export const UploadQueue = memo(function UploadQueue({ items, onClearFinished, onCancelAll, onCancelItem, onRetryItem }: UploadQueueProps) {
     if (items.length === 0) return null;
 
     const hasPendingOrActive = items.some(i => i.status === 'pending' || i.status === 'uploading');
 
     return (
-        <div className="fixed bottom-4 right-4 w-80 bg-telegram-surface border border-telegram-border rounded-xl shadow-2xl overflow-hidden z-[100]">
+        <div className="w-80 bg-telegram-surface border border-telegram-border rounded-xl shadow-2xl overflow-hidden">
             <div className="p-3 border-b border-telegram-border bg-telegram-hover flex justify-between items-center">
                 <h4 className="text-sm font-medium text-telegram-text">Uploads</h4>
                 <div className="flex gap-2">
@@ -99,4 +100,4 @@ export function UploadQueue({ items, onClearFinished, onCancelAll, onCancelItem,
             </div>
         </div>
     )
-}
+});
