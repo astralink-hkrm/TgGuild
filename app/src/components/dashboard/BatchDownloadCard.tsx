@@ -44,6 +44,14 @@ export const BatchDownloadCard = memo(function BatchDownloadCard({
     onCancelItem,
     onRetryItem,
 }: BatchDownloadCardProps) {
+    console.log('[BatchDownloadCard] Rendering with:', {
+        folderName: batch.folderName,
+        dirPath: batch.dirPath,
+        itemCount: batch.items.length,
+        batchId: batch.batchId,
+        status: batch.status,
+    });
+
     const isCancelling = batch.status === 'cancelled';
     const isActive = batch.status === 'downloading';
     const isCompleted = batch.status === 'completed';

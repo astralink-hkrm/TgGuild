@@ -61,11 +61,11 @@ function updateItemInBatch(batches: BatchDownload[], itemId: string, updater: (i
 export function useFileDownload(store: Store | null) {
     const [downloadQueue, setDownloadQueue] = useState<DownloadItem[]>([]);
     const [batchDownloads, setBatchDownloads] = useState<BatchDownload[]>([]);
-    const [processing, setProcessing] = useState(false);
     const [initialized, setInitialized] = useState(false);
     const cancelledRef = useRef<Set<string>>(new Set());
     const pendingOpensRef = useRef<Set<number>>(new Set());
     const [openingProgress, setOpeningProgress] = useState<OpeningProgress | null>(null);
+    const [processing, setProcessing] = useState(false);
 
     // Listen for progress events from Rust
     useEffect(() => {
@@ -146,13 +146,11 @@ export function useFileDownload(store: Store | null) {
     // Queue Processor
     useEffect(() => {
         if (processing) return;
-
-        const nextSingle = downloadQueue.find(i => i.status === 'pending');
-        if (nextSingle) {
-            processItem(nextSingle);
+        const nextItem = downloadQueue.find(i => i.status === 'pending');
+        if (nextItem) {
+            processItem(nextItem);
             return;
         }
-
         for (const batch of batchDownloads) {
             if (batch.status !== 'downloading') continue;
             const nextBatchItem = batch.items.find(i => i.status === 'pending');
@@ -165,7 +163,6 @@ export function useFileDownload(store: Store | null) {
 
     const processItem = async (item: DownloadItem) => {
         setProcessing(true);
-
         const markDownloading = (id: string) => {
             setDownloadQueue(q => q.map(i => i.id === id ? { ...i, status: 'downloading', progress: 0 } : i));
             setBatchDownloads(prev => updateItemInBatch(prev, id, i => ({ ...i, status: 'downloading', progress: 0 })));
@@ -182,7 +179,6 @@ export function useFileDownload(store: Store | null) {
                     } else {
                         setDownloadQueue(q => q.filter(i => i.id !== item.id));
                     }
-                    setProcessing(false);
                     return;
                 }
                 savePath = dialogPath;
@@ -338,6 +334,14 @@ export function useFileDownload(store: Store | null) {
             toast.success(`Created folder structure at ${rootDirPath}`);
             return;
         }
+
+        console.log('[queueBulkDownload] Creating batch:', {
+            batchId,
+            currentFolderName,
+            folderName: currentFolderName,
+            itemCount: items.length,
+            dirPath: rootDirPath,
+        });
 
         const batch: BatchDownload = {
             batchId,
