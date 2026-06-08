@@ -49,7 +49,7 @@ export function useFileOperations(
         }
     }
 
-    const handleRename = async (id: number, newName: string) => {
+    const handleRename = async (id: number, _currentName: string, newName: string) => {
         try {
             await invoke('cmd_rename_file', { messageId: id, folderId: activeFolderId, newName });
             invalidateCurrent();
