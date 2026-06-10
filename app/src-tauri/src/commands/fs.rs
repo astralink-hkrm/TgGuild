@@ -153,7 +153,7 @@ async fn write_tree(
                     return Err("Groups are not supported for file operations.".to_string())
                 }
             };
-            client
+            match client
                 .invoke(&tl::functions::messages::EditMessage {
                     no_webpage: true,
                     peer: input_peer,
@@ -168,7 +168,15 @@ async fn write_tree(
                     schedule_repeat_period: None,
                 })
                 .await
-                .map_err(|e| format!("Failed to update tree: {}", e))?;
+            {
+                Ok(_) => {}
+                Err(e) => {
+                    let err_str = e.to_string();
+                    if !err_str.contains("MESSAGE_NOT_MODIFIED") {
+                        return Err(format!("Failed to update tree: {}", err_str));
+                    }
+                }
+            }
             if !msg.pinned() {
                 client
                     .pin_message(peer, msg.id())
@@ -912,7 +920,7 @@ pub async fn cmd_rename_file(
                     return Err("Groups are not supported for file operations.".to_string())
                 }
             };
-            client
+            match client
                 .invoke(&tl::functions::messages::EditMessage {
                     no_webpage: true,
                     peer: input_peer,
@@ -927,7 +935,15 @@ pub async fn cmd_rename_file(
                     schedule_repeat_period: None,
                 })
                 .await
-                .map_err(|e| format!("Failed to rename folder: {}", e))?;
+            {
+                Ok(_) => {}
+                Err(e) => {
+                    let err_str = e.to_string();
+                    if !err_str.contains("MESSAGE_NOT_MODIFIED") {
+                        return Err(format!("Failed to rename folder: {}", err_str));
+                    }
+                }
+            }
             return Ok(true);
         }
         if let Some((_, parent_id, current_id)) = parse_virtual_file_meta(existing.text()) {
@@ -941,7 +957,7 @@ pub async fn cmd_rename_file(
                     return Err("Groups are not supported for file operations.".to_string())
                 }
             };
-            client
+            match client
                 .invoke(&tl::functions::messages::EditMessage {
                     no_webpage: true,
                     peer: input_peer,
@@ -956,7 +972,15 @@ pub async fn cmd_rename_file(
                     schedule_repeat_period: None,
                 })
                 .await
-                .map_err(|e| format!("Failed to rename file: {}", e))?;
+            {
+                Ok(_) => {}
+                Err(e) => {
+                    let err_str = e.to_string();
+                    if !err_str.contains("MESSAGE_NOT_MODIFIED") {
+                        return Err(format!("Failed to rename file: {}", err_str));
+                    }
+                }
+            }
             return Ok(true);
         }
     }
@@ -973,7 +997,7 @@ pub async fn cmd_rename_file(
         Peer::Group(_) => return Err("Groups are not supported for file operations.".to_string()),
     };
 
-    client
+    match client
         .invoke(&tl::functions::messages::EditMessage {
             no_webpage: true,
             peer: input_peer,
@@ -988,7 +1012,15 @@ pub async fn cmd_rename_file(
             schedule_repeat_period: None,
         })
         .await
-        .map_err(|e| format!("Failed to rename file (edit caption): {}", e))?;
+    {
+        Ok(_) => {}
+        Err(e) => {
+            let err_str = e.to_string();
+            if !err_str.contains("MESSAGE_NOT_MODIFIED") {
+                return Err(format!("Failed to rename file (edit caption): {}", err_str));
+            }
+        }
+    }
 
     Ok(true)
 }
@@ -1093,7 +1125,7 @@ pub async fn cmd_move_to_virtual_folder(
 
                 let new_text = virtual_file_meta_text(&name, target_virtual_folder_id, final_cid);
 
-                client
+                match client
                     .invoke(&tl::functions::messages::EditMessage {
                         no_webpage: true,
                         peer: input_peer,
@@ -1108,7 +1140,15 @@ pub async fn cmd_move_to_virtual_folder(
                         schedule_repeat_period: None,
                     })
                     .await
-                    .map_err(|e| format!("Failed to move file to virtual folder: {}", e))?;
+                {
+                    Ok(_) => {}
+                    Err(e) => {
+                        let err_str = e.to_string();
+                        if !err_str.contains("MESSAGE_NOT_MODIFIED") {
+                            return Err(format!("Failed to move file to virtual folder: {}", err_str));
+                        }
+                    }
+                }
             }
         }
 
@@ -1172,7 +1212,7 @@ pub async fn cmd_move_to_virtual_folder(
                 virtual_file_meta_text(&name, target_virtual_folder_id, final_cid)
             };
 
-            client
+            match client
                 .invoke(&tl::functions::messages::EditMessage {
                     no_webpage: true,
                     peer: input_peer,
@@ -1187,7 +1227,15 @@ pub async fn cmd_move_to_virtual_folder(
                     schedule_repeat_period: None,
                 })
                 .await
-                .map_err(|e| format!("Failed to move file to virtual folder: {}", e))?;
+            {
+                Ok(_) => {}
+                Err(e) => {
+                    let err_str = e.to_string();
+                    if !err_str.contains("MESSAGE_NOT_MODIFIED") {
+                        return Err(format!("Failed to move file to virtual folder: {}", err_str));
+                    }
+                }
+            }
         }
     }
 
