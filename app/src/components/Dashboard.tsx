@@ -436,9 +436,26 @@ export function Dashboard({ onLogout }: { onLogout: () => void }) {
         : folders.find(f => f.id === activeFolderId)?.name || "Folder";
     const currentDrivePath = [driveName, ...virtualFolderStack.map(folder => folder.name)].join(' / ');
 
-    const canManageActiveGroup = activeGroupId !== null && activeMembers.some(member => (
-        String(member.user_id) === currentUserId && (member.is_admin || member.is_owner)
-    ));
+    const [canManageActiveGroup, setCanManageActiveGroup] = useState(false);
+
+    useEffect(() => {
+        const checkAdmin = async () => {
+            const targetId = activeFolderId || activeGroupId;
+            if (targetId === null) {
+                setCanManageActiveGroup(false);
+                return;
+            }
+            try {
+                const isAdmin = await invoke<boolean>('cmd_check_admin', { teamId: targetId });
+                console.log(isAdmin ? 'yes' : 'no');
+                setCanManageActiveGroup(isAdmin);
+            } catch (e) {
+                console.log('no');
+                setCanManageActiveGroup(false);
+            }
+        };
+        checkAdmin();
+    }, [activeGroupId, activeFolderId]);
 
     const handleRootDragOver = (e: React.DragEvent) => {
         if (internalDragRef.current) {

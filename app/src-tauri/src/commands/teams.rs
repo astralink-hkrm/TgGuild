@@ -582,6 +582,50 @@ fn get_dialog_unread_count(dialog: &tl::enums::Dialog) -> i32 {
 }
 
 #[tauri::command]
+pub async fn cmd_check_admin(
+    team_id: i64,
+    state: State<'_, TelegramState>,
+) -> Result<bool, String> {
+    let client_opt = state.client.lock().await.clone();
+    if client_opt.is_none() {
+        return Ok(false);
+    }
+    let client = client_opt.unwrap();
+
+    // Print "yes" to server terminal if logged in
+    println!("yes");
+
+    let peer = resolve_peer(&client, Some(team_id), &state.peer_cache).await?;
+    let me = client.get_me().await.map_err(map_error)?;
+
+    let is_admin = match &peer {
+        Peer::Channel(_) | Peer::Group(_) => {
+            let mut participants = client.iter_participants(&peer);
+            let mut found_me_as_admin = false;
+            while let Some(p) = participants.next().await.map_err(map_error)? {
+                if p.user.raw.id() == me.raw.id() {
+                    found_me_as_admin = match p.role {
+                        grammers_client::types::Role::Creator(_) | grammers_client::types::Role::Admin(_) => true,
+                        _ => false,
+                    };
+                    break;
+                }
+            }
+            found_me_as_admin
+        }
+        _ => false,
+    };
+
+    if is_admin {
+        println!("yes");
+    } else {
+        println!("no");
+    }
+
+    Ok(is_admin)
+}
+
+#[tauri::command]
 pub async fn cmd_get_team_members(
     team_id: i64,
     state: State<'_, TelegramState>,
@@ -592,58 +636,60 @@ pub async fn cmd_get_team_members(
     }
     let client = client_opt.unwrap();
 
-    log::info!("Fetching members for team/channel: {}", team_id);
-
     let peer = resolve_peer(&client, Some(team_id), &state.peer_cache).await?;
 
     let mut members = Vec::new();
     let mut participants = client.iter_participants(&peer);
-
-    // Limit to 100 members for performance
-    let mut count = 0;
-    while let Some(participant) = participants.next().await.map_err(|e| e.to_string())? {
-        if count >= 100 {
-            break;
+    
+    loop {
+        match participants.next().await {
+            Ok(Some(p)) => {
+                members.push(TeamMember {
+                    user_id: p.user.raw.id(),
+                    first_name: p.user.first_name().unwrap_or("Unknown").to_string(),
+                    last_name: p.user.last_name().map(|s| s.to_string()),
+                    username: p.user.username().map(|s| s.to_string()),
+                    phone: p.user.phone().map(|s| s.to_string()),
+                    is_admin: match p.role {
+                        grammers_client::types::Role::Admin(_) => true,
+                        grammers_client::types::Role::Creator(_) => true,
+                        _ => false,
+                    },
+                    is_owner: match p.role {
+                        grammers_client::types::Role::Creator(_) => true,
+                        _ => false,
+                    },
+                    role: match p.role {
+                        grammers_client::types::Role::Creator(_) => "owner".to_string(),
+                        grammers_client::types::Role::Admin(_) => "admin".to_string(),
+                        _ => "member".to_string(),
+                    },
+                    access_hash: match p.user.raw {
+                        tl::enums::User::User(ref u) => u.access_hash,
+                        _ => None,
+                    },
+                    photo_url: if user_has_photo(&p.user.raw) {
+                        Some("present".to_string())
+                    } else {
+                        None
+                    },
+                    invite_eligible: true,
+                    invite_restriction: None,
+                });
+            }
+            Ok(None) => break,
+            Err(e) => {
+                let err_str = e.to_string();
+                if err_str.contains("CHAT_ADMIN_REQUIRED") {
+                    log::warn!("Could not fetch member list for peer: {}", err_str);
+                    return Ok(Vec::new());
+                }
+                return Err(map_error(e));
+            }
         }
-
-        let user = &participant.user;
-        let first_name = user.first_name().unwrap_or("Unknown").to_string();
-        let last_name = user.last_name().map(|s| s.to_string());
-        let username = user.username().map(|s| s.to_string());
-
-        // Basic role detection from the grammers-client Role
-        let (is_admin, is_owner, role_name) = match &participant.role {
-            grammers_client::types::Role::Creator(_) => (true, true, "owner".to_string()),
-            grammers_client::types::Role::Admin(_) => (true, false, "admin".to_string()),
-            _ => (false, false, "member".to_string()),
-        };
-
-        members.push(TeamMember {
-            user_id: user.raw.id(),
-            first_name,
-            last_name,
-            username,
-            phone: None, // Phone usually not available for privacy
-            is_admin,
-            is_owner,
-            role: role_name,
-            photo_url: if user_has_photo(&user.raw) {
-                Some("present".to_string())
-            } else {
-                None
-            },
-            access_hash: match &user.raw {
-                tl::enums::User::User(u) => u.access_hash,
-                _ => None,
-            },
-            invite_eligible: true,
-            invite_restriction: None,
-        });
-
-        count += 1;
+        if members.len() >= 100 { break; }
     }
 
-    log::info!("Found {} members for team {}", members.len(), team_id);
     Ok(members)
 }
 

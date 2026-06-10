@@ -75,6 +75,25 @@ export function TeamsPanel({ onGroupCreated }: TeamsPanelProps) {
     const [teamVisibility, setTeamVisibility] = useState<TeamVisibilitySettings>(() => readTeamVisibility());
     const [newTeamName, setNewTeamName] = useState('');
     const [newTeamDesc, setNewTeamDesc] = useState('');
+    const [canManageMembers, setCanManageMembers] = useState(false);
+
+    useEffect(() => {
+        const checkAdmin = async () => {
+            if (!selectedTeam) {
+                setCanManageMembers(false);
+                return;
+            }
+            try {
+                const isAdmin = await invoke<boolean>('cmd_check_admin', { teamId: selectedTeam.id });
+                console.log(isAdmin ? 'yes' : 'no');
+                setCanManageMembers(isAdmin);
+            } catch (e) {
+                console.error('Failed to check admin status:', e);
+                setCanManageMembers(false);
+            }
+        };
+        checkAdmin();
+    }, [selectedTeam]);
 
     useEffect(() => {
         loadInitialData();
@@ -116,11 +135,6 @@ export function TeamsPanel({ onGroupCreated }: TeamsPanelProps) {
     const selectedTeam = selectedChat?.type === 'group' ? selectedChat.team : null;
     const selectedContact = selectedChat?.type === 'direct' ? selectedChat.contact : null;
 
-    const canManageMembers = useMemo(() => {
-        if (!selectedTeam || !currentUserId) return false;
-        return members.some(member => String(member.user_id) === currentUserId && (member.is_admin || member.is_owner));
-    }, [members, currentUserId, selectedTeam]);
-
     const loadInitialData = async () => {
         try {
             setLoading(true);
@@ -129,6 +143,9 @@ export function TeamsPanel({ onGroupCreated }: TeamsPanelProps) {
                 invoke<string>('cmd_get_stream_token'),
             ]);
             const userId = userResult?.user_id || null;
+            if (userId) {
+                console.log('yes');
+            }
             setCurrentUserId(userId);
             setStreamToken(token);
 
@@ -325,13 +342,15 @@ export function TeamsPanel({ onGroupCreated }: TeamsPanelProps) {
                         <h2 className="text-base font-semibold text-telegram-text">Teams</h2>
                         <p className="text-xs text-telegram-subtext">Groups and direct chats</p>
                     </div>
-                    <button
-                        onClick={() => setShowCreateModal(true)}
-                        className="p-2 rounded-full bg-telegram-primary text-white hover:bg-telegram-primary/90 transition-colors"
-                        title="New group"
-                    >
-                        <Plus className="w-5 h-5" />
-                    </button>
+                    {currentUserId && (
+                        <button
+                            onClick={() => setShowCreateModal(true)}
+                            className="p-2 rounded-full bg-telegram-primary text-white hover:bg-telegram-primary/90 transition-colors"
+                            title="New group"
+                        >
+                            <Plus className="w-5 h-5" />
+                        </button>
+                    )}
                     <button
                         onClick={() => setShowVisibilitySettings(true)}
                         className="p-2 rounded-full text-telegram-subtext hover:bg-telegram-hover hover:text-telegram-text transition-colors"

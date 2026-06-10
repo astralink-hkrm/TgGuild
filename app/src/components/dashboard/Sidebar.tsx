@@ -108,6 +108,9 @@ export function Sidebar({
     const loadInitialDirectory = async () => {
         try {
             const user = await invoke<CurrentUser | null>('cmd_get_current_user');
+            if (user) {
+                console.log('yes');
+            }
             setCurrentUser(user);
 
             const cached = readTelegramDirectoryCache<GroupInfo, ContactInfo>(user?.user_id || null);
@@ -424,15 +427,17 @@ export function Sidebar({
                                         {teamsLoadingMore ? 'Loading...' : 'Load More Teams'}
                                     </button>
                                 )}
-                                <div className="flex gap-2 pt-2">
-                                    <button
-                                        onClick={handleCreateGroup}
-                                        className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-xs font-medium text-telegram-subtext hover:bg-telegram-hover hover:text-telegram-text transition-all border border-dashed border-telegram-border/50"
-                                    >
-                                        <Plus className="w-3 h-3" />
-                                        New
-                                    </button>
-                                </div>
+                                {currentUser && (
+                                    <div className="flex gap-2 pt-2">
+                                        <button
+                                            onClick={handleCreateGroup}
+                                            className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-xs font-medium text-telegram-subtext hover:bg-telegram-hover hover:text-telegram-text transition-all border border-dashed border-telegram-border/50"
+                                        >
+                                            <Plus className="w-3 h-3" />
+                                            New
+                                        </button>
+                                    </div>
+                                )}
 
                                 <div className="pt-3">
                                     <button
