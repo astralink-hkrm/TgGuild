@@ -1,0 +1,28 @@
+# `app/src-tauri/src/commands/auth.rs` — Authentication Commands (~400 lines)
+
+- **Purpose**: Telegram auth flow + grammers runner lifecycle management
+- **Imports**: grammers-client, grammers-tl-types, grammers-session (SQLite), Tauri API, tokio
+- **Key functions**:
+  - `ensure_client_initialized(state)` — if client exists, return; otherwise init new grammers `Client` from session file, connect to Telegram DC
+  - `ensure_runner_running(state, client)` — critical: `take()` the old `runner_shutdown` sender, send shutdown signal, wait for old runner to stop, then spawn new `client.runner()` task with new `oneshot::Sender`
+  - `cmd_start_login(phone, state)` → `invoke("start_login")`:
+    - Calls `ensure_client_initialized`
+    - Sends `client.send_code(phone)`
+    - Stores `login_token` in state
+    - Returns `{ phone_registered, timeout }`
+  - `cmd_verify_code(code, state)` → `invoke("verify_code")`:
+    - Calls `client.sign_in(login_token, code)`
+    - If 2FA required: stores `password_token`, returns `{ twofa_required: true }`
+    - Otherwise: saves session, calls `ensure_runner_running`, returns `AuthResult`
+  - `cmd_verify_password(password, state)` → `invoke("verify_password")`:
+    - Calls `client.check_password(password_token, password)`
+    - Saves session, calls `ensure_runner_running`, returns `AuthResult`
+  - `cmd_check_authorization(state)` → `invoke("check_authorization")`:
+    - Checks if saved session exists and is authorized
+  - `cmd_set_api_id(api_id, state, app_handle)` → `invoke("set_api_id")`:
+    - Stores API ID in Tauri Store (encrypted, key: `api_id.enc`)
+  - `cmd_logout(state)` → `invoke("logout")`:
+    - Sends `client.log_out()`
+    - Clears session file
+    - Sends runner shutdown signal
+    - Resets all state fields

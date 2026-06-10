@@ -1,0 +1,34 @@
+# `app/src/components/Dashboard.tsx` — Main Workspace (~850 lines)
+
+- **Purpose**: Core orchestrator — manages sidebar, file explorer, team chat, modals, upload/download queues, keyboard shortcuts, Telegram connection
+- **Imports**: React 19 (useState, useEffect, useCallback, useRef, useMemo), Tauri (invoke, listen, app/events emit), TanStack Query (useQuery, useMutation, useQueryClient), framer-motion (AnimatePresence), lucide-react
+- **Props**: `store` (Tauri Store), `onLogout` callback
+- **State** (30+ state variables):
+  - `folders`, `teams`, `contacts`, `drives` — data lists
+  - `activeFolderId` — currently viewed folder
+  - `viewMode` — 'grid' | 'list'
+  - `selectedItems` — Set<number> for multi-select
+  - `sortBy` / `sortOrder` — sorting config
+  - `searchQuery` — search string
+  - `contextMenu` — `{x, y, item}` | null
+  - `editingFolderId` — inline rename
+  - `uploadQueue`, `downloadQueue` — progress queues
+  - `downloadQueueExpanded` — batch UI toggle
+  - Various modal visibility states (createFolder, rename, move, share, subscribers, visibility, team)
+  - `activeTeamId` — current team chat
+  - `currentDateTime` — clock display
+  - `isOnline` — network status
+- **Key flows**:
+  - On mount: `invoke("get_folders")` + `invoke("get_teams")` via `useQuery`
+  - Folder change: `invoke("get_files", {folder_id})` via `useQuery`
+  - Upload: `useFileUpload` → `invoke("upload_file")` → query invalidation
+  - Download: `useFileDownload` → `invoke("download_file")`
+  - Keyboard shortcuts: `useKeyboardShortcuts` (Delete, Escape, Enter, Cmd+A, Cmd+F)
+  - Drag-drop: `handleDrop` → invokes upload for dropped files
+- **Layout**:
+  - `Sidebar` (left): folders, teams, contacts, drives, bandwidth, members
+  - `TopBar` (top): breadcrumb, search, view toggle, member stack, theme toggle
+  - `FileExplorer` (center): grid or list view
+  - Conditional: `TeamChat` replaces FileExplorer when team is active
+  - Modals rendered as overlays via `AnimatePresence`
+  - Upload/Download queues: fixed bottom-right panels

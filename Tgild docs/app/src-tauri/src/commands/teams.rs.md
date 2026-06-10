@@ -1,0 +1,22 @@
+# `app/src-tauri/src/commands/teams.rs` — Teams & Chat Commands (~1800 lines)
+
+- **Purpose**: All team/group/chat operations — message management, member management, file sharing
+- **Imports**: grammers-client, grammers-tl-types, tokio, tauri, serde_json, chrono
+- **Commands**:
+  - `cmd_get_teams(state)` → iterates dialogs, filters for groups/supergroups/channels, returns `Vec<Drive>` with metadata
+  - `cmd_get_contacts(state)` → fetches user contacts via `client.contacts().get_contacts()`, returns `Vec<UserProfile>`
+  - `cmd_get_team_members(team_id, state)` → gets chat participants via `client.get_participants()`, returns `Vec<Member>` with roles
+  - `cmd_get_team_messages(team_id, limit, offset_id, state)` → paginated message history via `client.get_messages()`, returns messages with sender info, date, media metadata. Supports `offset_id` for cursor-based pagination
+  - `cmd_send_message(team_id, message, reply_to, state)` → sends text message to group chat via `client.send_message()`. Supports reply context
+  - `cmd_send_file(team_id, file_path, caption, state)` → uploads and sends file to group chat via `client.send_message()` with media
+  - `cmd_create_group(name, member_ids, state)` → creates new supergroup via Telegram API, adds initial members
+  - `cmd_invite_to_group(team_id, user_id, state)` → adds user to group via `client.add_participant()`
+  - `cmd_remove_from_group(team_id, user_id, state)` → removes user from group via `client.remove_participant()`
+  - `cmd_get_member_photo(user_id, state)` → downloads user profile photo, returns cached file path
+  - `cmd_forward_message(team_id, message_id, target_chat_id, state)` → forwards message to another chat
+  - `cmd_get_direct_chat_messages(user_id, limit, offset_id, state)` → gets DM messages with specific user
+  - `cmd_download_team_media(message_id, team_id, state, app_handle)` → downloads media from team message, returns file path
+  - `cmd_mark_read(team_id, state)` → marks all messages in a chat as read via `client.read_chat()`
+  - `cmd_pin_message(team_id, message_id, state)` → pins a message in the chat
+  - `cmd_search_messages(team_id, query, state)` → searches message text within a chat
+  - `cmd_get_message_media(message_id, team_id, state)` → returns media metadata for a specific message

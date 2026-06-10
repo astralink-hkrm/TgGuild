@@ -1,0 +1,22 @@
+# `app/src-tauri/Cargo.toml` — Rust Dependencies
+
+- **Package**: `tgguild` v1.3.28
+- **Edition**: 2021
+- **Dependencies**:
+  - `tauri` v2 — desktop app framework
+  - `tauri-plugin-{store, shell, dialog, fs, opener, updater}` v2 — Tauri plugins
+  - `tauri-build` v2 (build-dep) — Tauri build utils
+  - `grammers-client` v0.6 — MTProto client (Telegram API)
+  - `grammers-tl-types` v0.6 — Telegram type definitions
+  - `grammers-mtsender` v0.6 — MTProto sender
+  - `grammers-session` v0.6 — Session file management
+  - `actix-web` v4 — HTTP server for streaming
+  - `actix-cors` v0.7 — CORS for streaming server
+  - `tokio` v1 (full) — async runtime
+  - `serde` + `serde_json` — JSON serialization
+  - `chrono` — date/time handling
+  - `uuid` v1 — unique IDs
+  - `sha2` — hashing (cache keys)
+  - `image` — thumbnail generation
+  - `rand` — random token generation
+  - `log` + `env_logger` — logging

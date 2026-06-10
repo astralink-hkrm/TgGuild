@@ -1,0 +1,24 @@
+# `app/src/App.tsx` — Root Component
+
+- **Purpose**: Top-level orchestrator — initializes providers, manages auth state, routes between AuthWizard and Dashboard
+- **Imports**:
+  - React 19 hooks: `useState`, `useEffect`, `useCallback`
+  - TanStack Query: `QueryClient`, `QueryClientProvider`
+  - Tauri Store: `load`, `set`, `Store`
+  - Context: `ThemeProvider`, `ConfirmProvider`, `DropZoneProvider`
+  - Components: `AuthWizard`, `Dashboard`, `ErrorBoundary`
+- **State**:
+  - `isLoggedIn` — auth state boolean
+  - `loading` — initial loading screen
+  - `fadeIn` — transition animation control
+- **On mount**:
+  - Loads Tauri store, checks for saved auth session
+  - If session exists → auto-navigate to Dashboard (with fade transition)
+  - If no session → show AuthWizard
+- **Layout** (loading state):
+  - Full-screen dark gradient background
+  - Animated TgGuild logo text (pulsing opacity)
+- **Props passed to Dashboard**:
+  - `store` — Tauri Store instance
+  - `onLogout` — callback to reset auth state
+- **Error boundary**: Wraps entire app in `ErrorBoundary`

@@ -1,0 +1,23 @@
+# `app/src-tauri/src/lib.rs` — Tauri App Builder (~200 lines)
+
+- **Purpose**: Assembles the Tauri application, initializes state, registers plugins and commands, starts Actix streaming server
+- **Plugins registered**:
+  - `tauri-plugin-store` — encrypted key-value store (API ID, settings)
+  - `tauri-plugin-shell` — open files in system handler
+  - `tauri-plugin-dialog` — file open/save dialogs
+  - `tauri-plugin-fs` — file system access
+  - `tauri-plugin-opener` — open URLs/files
+  - `tauri-plugin-updater` — app updates
+- **State management** (`tauri::Builder.manage`):
+  - `TelegramState` (Arc<Mutex<...>>) — shared state for grammers client, auth tokens, peer cache, runner handles
+  - `BandwidthManager` (Arc<Mutex<...>>) — daily bandwidth tracker
+  - `StreamConfig` (Arc<...>) — active stream tokens map
+- **Actix server startup**: Spawns `server::start_streaming_server(stream_config)` in a new tokio task on port 14201
+- **Commands registered** (30+ via `.invoke_handler(tauri::generate_handler![...])`):
+  - Auth: `cmd_start_login`, `cmd_verify_code`, `cmd_verify_password`, `cmd_check_authorization`, `cmd_set_api_id`, `cmd_logout`
+  - FS: `cmd_get_folders`, `cmd_get_files`, `cmd_get_folder_tree`, `cmd_get_file`, `cmd_upload_file`, `cmd_download_file`, `cmd_delete_file`, `cmd_delete_folder`, `cmd_rename_file`, `cmd_rename_folder`, `cmd_move_to_folder`, `cmd_move_file_to_folder`, `cmd_create_folder`, `cmd_get_thumbnail`, `cmd_get_preview`, `cmd_search_files`
+  - Teams: `cmd_get_teams`, `cmd_get_contacts`, `cmd_get_team_members`, `cmd_get_team_messages`, `cmd_send_message`, `cmd_send_file`, `cmd_create_group`, `cmd_invite_to_group`, `cmd_remove_from_group`, `cmd_get_member_photo`, `cmd_forward_message`, `cmd_get_direct_chat_messages`, `cmd_download_team_media`, `cmd_mark_read`, `cmd_pin_message`, `cmd_search_messages`, `cmd_get_message_media`
+  - Streaming: `cmd_get_stream_token`, `cmd_get_stream_info`
+  - Network: `cmd_is_network_available`
+  - Bandwidth: `cmd_get_bandwidth_stats`
+- **Shutdown**: Registers `on_event` handler for `ExitRequested` to gracefully close streaming server and clean up grammers runners
