@@ -164,6 +164,13 @@ export function FileExplorer({
 
     const allVisibleSelected = sortedFiles.length > 0 && sortedFiles.every(file => selectedIds.includes(file.current_id ?? file.id));
 
+    const hasFolderSelected = useMemo(() => {
+        return selectedIds.some(id => {
+            const file = files.find(f => (f.current_id ?? f.id) === id);
+            return file?.type === 'folder';
+        });
+    }, [files, selectedIds]);
+
     const BulkActions = () => (
         <div className="ml-auto flex flex-wrap items-center justify-end gap-2 animate-in fade-in slide-in-from-top-1">
             <button onClick={onCreateFolder} className="flex items-center gap-1 rounded-md bg-telegram-hover px-3 py-1.5 text-xs text-telegram-text transition hover:bg-telegram-border">
@@ -186,10 +193,12 @@ export function FileExplorer({
             {selectedIds.length > 0 && (
                 <>
                     <span className="mr-1 text-xs text-telegram-subtext">{selectedIds.length} selected</span>
-                    <button onClick={onShowShareModal} className="flex items-center gap-1 rounded-md bg-telegram-primary/20 px-3 py-1.5 text-xs font-medium text-telegram-primary transition hover:bg-telegram-primary/30">
-                        <Send className="h-3.5 w-3.5" />
-                        Share
-                    </button>
+                    {!hasFolderSelected && (
+                        <button onClick={onShowShareModal} className="flex items-center gap-1 rounded-md bg-telegram-primary/20 px-3 py-1.5 text-xs font-medium text-telegram-primary transition hover:bg-telegram-primary/30">
+                            <Send className="h-3.5 w-3.5" />
+                            Share
+                        </button>
+                    )}
                     <button onClick={onShowMoveModal} className="flex items-center gap-1 rounded-md bg-telegram-primary/20 px-3 py-1.5 text-xs font-medium text-telegram-primary transition hover:bg-telegram-primary/30">
                         <MoveRight className="h-3.5 w-3.5" />
                         Move
