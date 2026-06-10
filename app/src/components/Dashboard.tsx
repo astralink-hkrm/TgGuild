@@ -556,18 +556,6 @@ export function Dashboard({ onLogout }: { onLogout: () => void }) {
                     </div>
                 ) : activeGroupId !== null ? (
                     <div className="flex-1 flex flex-col min-h-0 relative">
-                        <div className="absolute top-4 right-4 z-10 flex items-center gap-2">
-                            <MemberStack members={activeMembers} size="sm" />
-                            {canManageActiveGroup && (
-                                <button
-                                    onClick={() => setShowAddSubscriber(true)}
-                                    className="w-8 h-8 rounded-full bg-telegram-primary/10 hover:bg-telegram-primary/20 text-telegram-primary flex items-center justify-center transition-all shadow-sm active:scale-95"
-                                    title="Add Member"
-                                >
-                                    <Plus className="w-4 h-4" />
-                                </button>
-                            )}
-                        </div>
                         <TeamChat 
                             groupId={activeGroupId} 
                             groupName={groups.find(g => g.id === activeGroupId)?.name || 'Group Chat'}
@@ -575,6 +563,7 @@ export function Dashboard({ onLogout }: { onLogout: () => void }) {
                             memberCount={groups.find(g => g.id === activeGroupId)?.member_count || activeMembers.length}
                             canManageMembers={canManageActiveGroup}
                             mentionableMembers={activeMembers}
+                            members={activeMembers}
                             onManageMembers={() => setShowAddSubscriber(true)}
                         />
                     </div>
@@ -588,6 +577,8 @@ export function Dashboard({ onLogout }: { onLogout: () => void }) {
                             onSearchChange={setSearchTerm}
                             members={activeMembers}
                             onAddSubscriber={activeFolderId ? () => setShowAddSubscriber(true) : undefined}
+                            canManageMembers={activeFolderId !== null ? canManageActiveGroup : true}
+                            groupId={activeFolderId || activeGroupId}
                         />
                         {searchTerm.length > 2 && (
                             <div className="px-6 pt-4 pb-0">

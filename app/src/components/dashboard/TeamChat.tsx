@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { tempDir, join } from '@tauri-apps/api/path';
 import { invoke } from '@tauri-apps/api/core';
 import { open, save } from '@tauri-apps/plugin-dialog';
@@ -19,11 +19,16 @@ import {
     Search,
     Send,
     Smile,
+    Plus,
     UserPlus,
+    UserMinus,
     Video,
+    ChevronDown,
+    ChevronUp,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { TelegramAvatar } from './TelegramAvatar';
+import { MemberStack } from './MemberStack';
 import { readTelegramMessageCache, saveTelegramMessageCache } from './telegramCache';
 
 interface ChatMessage {
@@ -79,6 +84,7 @@ interface TeamChatProps {
     isDirect?: boolean;
     mentionableMembers?: MentionableMember[];
     onManageMembers?: () => void;
+    members?: any[];
 }
 
 export function TeamChat({
@@ -90,6 +96,7 @@ export function TeamChat({
     isDirect = false,
     mentionableMembers = [],
     onManageMembers,
+    members: propMembers = [],
 }: TeamChatProps) {
     const [messages, setMessages] = useState<ChatMessage[]>([]);
     const [loading, setLoading] = useState(true);
@@ -110,11 +117,38 @@ export function TeamChat({
     const [downloadingId, setDownloadingId] = useState<number | null>(null);
     const [streamToken, setStreamToken] = useState('');
     const [streamBaseUrl, setStreamBaseUrl] = useState('http://localhost:14201');
+    const [showPlusMenu, setShowPlusMenu] = useState(false);
+    const [membersExpanded, setMembersExpanded] = useState(false);
+
     const recorderRef = useRef<MediaRecorder | null>(null);
     const recordingChunksRef = useRef<BlobPart[]>([]);
     const inputRef = useRef<HTMLInputElement>(null);
     const messagesContainerRef = useRef<HTMLDivElement>(null);
     const messagesEndRef = useRef<HTMLDivElement>(null);
+
+    const sortedMembers = useMemo(() => {
+        return [...propMembers].sort((a, b) => 
+            (a.first_name || '').localeCompare(b.first_name || '')
+        );
+    }, [propMembers]);
+
+    const displayedMembers = membersExpanded ? sortedMembers : sortedMembers.slice(0, 3);
+    const hasMoreMembers = sortedMembers.length > 3;
+
+    const handleRemoveMember = async (e: React.MouseEvent, member: any) => {
+        e.stopPropagation();
+        if (!groupId) return;
+        try {
+            await invoke('cmd_remove_team_member', {
+                teamId: groupId,
+                userIdStr: String(member.user_id),
+                accessHashStr: member.access_hash,
+            });
+            toast.success(`Removed ${member.first_name}`);
+        } catch (e) {
+            toast.error(`Failed to remove: ${e}`);
+        }
+    };
     const peerKeyRef = useRef('');
     const peerKey = groupId === null ? 'saved' : String(groupId);
 
@@ -587,18 +621,68 @@ export function TeamChat({
                     <button className="p-2 text-telegram-subtext hover:text-telegram-text hover:bg-telegram-hover rounded-full transition-colors" title="Start meeting">
                         <Video className="w-5 h-5" />
                     </button>
-                    {canManageMembers && !isDirect && (
-                        <button
-                            onClick={onManageMembers}
-                            className="p-2 text-telegram-subtext hover:text-telegram-text hover:bg-telegram-hover rounded-full transition-colors"
-                            title="Manage members"
-                        >
-                            <UserPlus className="w-5 h-5" />
-                        </button>
-                    )}
-                    <button className="p-2 text-telegram-subtext hover:text-telegram-text hover:bg-telegram-hover rounded-full transition-colors" title="More">
+                    <button className="p-2 text-telegram-subtext hover:text-telegram-text hover:bg-telegram-hover rounded-full transition-colors mr-2" title="More">
                         <MoreVertical className="w-5 h-5" />
                     </button>
+
+                    {!isDirect && (
+                        <div className="flex items-center gap-3 ml-2 border-l border-telegram-border pl-4">
+                            <MemberStack members={sortedMembers} size="sm" />
+                            <div className="relative">
+                                <button
+                                    onClick={() => setShowPlusMenu(!showPlusMenu)}
+                                    className="w-8 h-8 rounded-full bg-telegram-primary/10 hover:bg-telegram-primary/20 text-telegram-primary flex items-center justify-center transition-all shadow-sm active:scale-95"
+                                    title="Options"
+                                >
+                                    <Plus className="w-4 h-4" />
+                                </button>
+                                {showPlusMenu && (
+                                    <div className="absolute right-0 top-full mt-2 w-72 bg-telegram-surface border border-telegram-border rounded-xl shadow-2xl z-[1000] overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+                                        <div className="p-3 border-b border-telegram-border bg-telegram-hover/30 flex items-center justify-between">
+                                            <span className="text-xs font-bold text-telegram-subtext uppercase tracking-wider">Members ({sortedMembers.length})</span>
+                                            {hasMoreMembers && (
+                                                <button
+                                                    onClick={() => setMembersExpanded(!membersExpanded)}
+                                                    className="text-[10px] text-telegram-primary hover:underline flex items-center gap-1"
+                                                >
+                                                    {membersExpanded ? <><ChevronUp className="w-3 h-3"/> Less</> : <><ChevronDown className="w-3 h-3"/> More</>}
+                                                </button>
+                                            )}
+                                        </div>
+                                        <div className="max-h-64 overflow-y-auto custom-scrollbar">
+                                            {displayedMembers.map(member => (
+                                                <div key={member.user_id} className="flex items-center gap-3 p-2 hover:bg-telegram-hover transition-colors group">
+                                                    <TelegramAvatar user={member} token={streamToken} size="sm" />
+                                                    <span className="flex-1 text-sm text-telegram-text truncate">{member.first_name} {member.last_name || ''}</span>
+                                                    {canManageMembers && !member.is_owner && (
+                                                        <button
+                                                            onClick={(e) => handleRemoveMember(e, member)}
+                                                            className="p-1.5 opacity-0 group-hover:opacity-100 hover:bg-red-500/10 text-red-400 rounded-md transition-all"
+                                                            title="Remove"
+                                                        >
+                                                            <UserMinus className="w-3.5 h-3.5" />
+                                                        </button>
+                                                    )}
+                                                </div>
+                                            ))}
+                                        </div>
+                                        {canManageMembers && (
+                                            <button
+                                                onClick={() => {
+                                                    setShowPlusMenu(false);
+                                                    onManageMembers?.();
+                                                }}
+                                                className="w-full flex items-center gap-2 p-3 text-sm text-telegram-primary hover:bg-telegram-primary/10 transition-colors border-t border-telegram-border"
+                                            >
+                                                <UserPlus className="w-4 h-4" />
+                                                Add People
+                                            </button>
+                                        )}
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    )}
                 </div>
             </div>
 
