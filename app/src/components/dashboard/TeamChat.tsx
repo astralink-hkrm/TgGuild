@@ -560,10 +560,10 @@ export function TeamChat({
     };
 
     return (
-        <div className="flex-1 flex flex-col bg-[#050505] overflow-hidden">
-            <div className="h-14 px-4 border-b border-[#1f1f1f] bg-[#0f0f0f] flex items-center justify-between flex-shrink-0">
+        <div className="flex-1 flex flex-col bg-telegram-bg overflow-hidden transition-colors duration-300">
+            <div className="h-14 px-4 border-b border-telegram-border bg-telegram-surface flex items-center justify-between flex-shrink-0 transition-colors duration-300">
                 <div className="flex items-center gap-3 min-w-0">
-                    <div className="w-10 h-10 rounded-full bg-[#242424] text-white flex items-center justify-center overflow-hidden">
+                    <div className="w-10 h-10 rounded-full bg-telegram-hover text-telegram-text flex items-center justify-center overflow-hidden transition-colors">
                         <TelegramAvatar
                             user={{ user_id: groupId ?? 'self', first_name: groupName, photo_url: groupPhotoUrl }}
                             token={streamToken}
@@ -573,30 +573,30 @@ export function TeamChat({
                         />
                     </div>
                     <div className="min-w-0">
-                        <h2 className="text-[15px] font-semibold text-white truncate">{groupName}</h2>
-                        <p className="text-xs text-[#8a8a8a] truncate">
+                        <h2 className="text-[15px] font-semibold text-telegram-text truncate">{groupName}</h2>
+                        <p className="text-xs text-telegram-subtext truncate">
                             {isDirect ? 'direct chat' : `${memberCount ?? 0} members`}
                         </p>
                     </div>
                 </div>
 
                 <div className="flex items-center gap-1">
-                    <button className="p-2 text-[#8a8a8a] hover:text-white hover:bg-white/5 rounded-full transition-colors" title="Search">
+                    <button className="p-2 text-telegram-subtext hover:text-telegram-text hover:bg-telegram-hover rounded-full transition-colors" title="Search">
                         <Search className="w-5 h-5" />
                     </button>
-                    <button className="p-2 text-[#8a8a8a] hover:text-white hover:bg-white/5 rounded-full transition-colors" title="Start meeting">
+                    <button className="p-2 text-telegram-subtext hover:text-telegram-text hover:bg-telegram-hover rounded-full transition-colors" title="Start meeting">
                         <Video className="w-5 h-5" />
                     </button>
                     {canManageMembers && !isDirect && (
                         <button
                             onClick={onManageMembers}
-                            className="p-2 text-[#8a8a8a] hover:text-white hover:bg-white/5 rounded-full transition-colors"
+                            className="p-2 text-telegram-subtext hover:text-telegram-text hover:bg-telegram-hover rounded-full transition-colors"
                             title="Manage members"
                         >
                             <UserPlus className="w-5 h-5" />
                         </button>
                     )}
-                    <button className="p-2 text-[#8a8a8a] hover:text-white hover:bg-white/5 rounded-full transition-colors" title="More">
+                    <button className="p-2 text-telegram-subtext hover:text-telegram-text hover:bg-telegram-hover rounded-full transition-colors" title="More">
                         <MoreVertical className="w-5 h-5" />
                     </button>
                 </div>
@@ -628,7 +628,7 @@ export function TeamChat({
                                 <button
                                     onClick={loadOlderMessages}
                                     disabled={loadingOlder}
-                                    className="rounded-full px-3 py-1 text-xs text-[#8a8a8a] hover:bg-white/5 hover:text-white disabled:opacity-60"
+                                    className="rounded-full px-3 py-1 text-xs text-telegram-subtext hover:bg-telegram-hover hover:text-telegram-text disabled:opacity-60 transition-colors"
                                 >
                                     {loadingOlder ? 'Loading older messages...' : 'Load older messages'}
                                 </button>
@@ -643,7 +643,7 @@ export function TeamChat({
                                 <div key={msg.id}>
                                     {showDateSeparator && (
                                         <div className="sticky top-2 z-10 my-4 flex justify-center">
-                                            <span className="rounded-full border border-[#242424] bg-[#111111]/95 px-3 py-1 text-[11px] font-medium text-[#b0b0b0] shadow-sm backdrop-blur">
+                                            <span className="rounded-full border border-telegram-border bg-telegram-surface/95 px-3 py-1 text-[11px] font-medium text-telegram-subtext shadow-sm backdrop-blur transition-colors">
                                                 {formatDateSeparator(msg.date)}
                                             </span>
                                         </div>
@@ -660,10 +660,10 @@ export function TeamChat({
                                                 />
                                             )}
                                             <div
-                                                className={`rounded-[18px] px-3 py-2 shadow-sm ${
+                                                className={`rounded-[18px] px-3 py-2 shadow-sm transition-colors duration-300 ${
                                                     outgoing
-                                                        ? 'rounded-br-md bg-[#262626] text-white border border-[#343434]'
-                                                        : 'rounded-bl-md bg-[#141414] text-[#f5f5f5] border border-[#242424]'
+                                                        ? 'rounded-br-md bg-telegram-primary/10 text-telegram-text border border-telegram-primary/20'
+                                                        : 'rounded-bl-md bg-telegram-surface text-telegram-text border border-telegram-border'
                                                 }`}
                                             >
                                                 {!outgoing && !isDirect && (
@@ -672,7 +672,7 @@ export function TeamChat({
                                                 {msg.has_media && msg.media_type !== 'none' && (
                                                     <div className="mb-2 overflow-hidden rounded-xl">
                                                         {['photo', 'image'].includes(msg.media_type) && mediaStreamUrl(msg) ? (
-                                                            <button onClick={() => handleDownload(msg)} className="block max-w-80 overflow-hidden rounded-xl bg-black/20">
+                                                            <button onClick={() => handleDownload(msg)} className="block max-w-80 overflow-hidden rounded-xl bg-black/5">
                                                                 <img src={mediaStreamUrl(msg) || ''} alt="" className="max-h-80 w-full object-cover" />
                                                             </button>
                                                         ) : null}
@@ -680,10 +680,10 @@ export function TeamChat({
                                                             onClick={() => handleDownload(msg)}
                                                             disabled={downloadingId === msg.id || msg.pending}
                                                             className={`mt-1 flex w-full min-w-56 items-center gap-3 rounded-xl p-3 text-left transition-colors ${
-                                                                outgoing ? 'bg-white/10 hover:bg-white/15' : 'bg-[#202020] hover:bg-[#292929]'
+                                                                outgoing ? 'bg-telegram-primary/20 hover:bg-telegram-primary/30' : 'bg-telegram-hover hover:bg-telegram-border'
                                                             } disabled:opacity-60`}
                                                         >
-                                                            <span className="flex h-10 w-10 items-center justify-center rounded-full bg-[#333333] text-white">
+                                                            <span className="flex h-10 w-10 items-center justify-center rounded-full bg-telegram-primary/20 text-telegram-primary">
                                                                 {downloadingId === msg.id || msg.pending ? <File className="w-5 h-5 animate-pulse" /> : getMediaIcon(msg.media_type)}
                                                             </span>
                                                             <span className="min-w-0 flex-1">
@@ -697,7 +697,7 @@ export function TeamChat({
                                                 {msg.text && (
                                                     <p className="whitespace-pre-wrap break-words text-sm leading-relaxed">{msg.text}</p>
                                                 )}
-                                                <div className={`mt-1 flex items-center justify-end gap-2 text-[10px] ${outgoing ? 'text-white/70' : 'text-[#8a8a8a]'}`}>
+                                                <div className={`mt-1 flex items-center justify-end gap-2 text-[10px] ${outgoing ? 'text-telegram-primary/60' : 'text-telegram-subtext'}`}>
                                                     {msg.pinned && <Pin className="h-3 w-3" />}
                                                     <button
                                                         onClick={() => handlePin(msg.id)}
@@ -714,18 +714,18 @@ export function TeamChat({
                                                             <button
                                                                 key={emoji}
                                                                 onClick={() => saveReaction(msg.id, emoji)}
-                                                                className="rounded-full bg-black/20 px-2 py-0.5 text-xs"
+                                                                className="rounded-full bg-telegram-hover px-2 py-0.5 text-xs transition-colors"
                                                             >
                                                                 {emoji}
                                                             </button>
                                                         ))}
                                                         {reactionPickerFor === msg.id && (
-                                                            <div className="absolute bottom-7 right-0 flex rounded-full border border-[#242424] bg-[#0f0f0f] p-1 shadow-2xl">
+                                                            <div className="absolute bottom-7 right-0 flex rounded-full border border-telegram-border bg-telegram-surface p-1 shadow-2xl z-50 transition-colors">
                                                                 {reactionEmojis.map(emoji => (
                                                                     <button
                                                                         key={emoji}
                                                                         onClick={() => saveReaction(msg.id, emoji)}
-                                                                        className="rounded-full p-1.5 text-lg hover:bg-white/10"
+                                                                        className="rounded-full p-1.5 text-lg hover:bg-telegram-hover transition-colors"
                                                                     >
                                                                         {emoji}
                                                                     </button>
@@ -736,7 +736,7 @@ export function TeamChat({
                                                 )}
                                                 <button
                                                     onClick={() => setReactionPickerFor(reactionPickerFor === msg.id ? null : msg.id)}
-                                                    className="mt-1 text-[10px] text-[#8a8a8a] opacity-0 transition-opacity group-hover:opacity-100"
+                                                    className="mt-1 text-[10px] text-telegram-subtext opacity-0 transition-opacity group-hover:opacity-100"
                                                 >
                                                     React
                                                 </button>
@@ -751,45 +751,45 @@ export function TeamChat({
                 <div ref={messagesEndRef} />
             </div>
 
-            <div className="relative border-t border-[#1f1f1f] bg-[#0f0f0f] p-3 flex-shrink-0">
+            <div className="relative border-t border-telegram-border bg-telegram-surface p-3 flex-shrink-0 transition-colors duration-300">
                 {attachmentDraft && (
-                    <div className="mb-2 flex items-center gap-3 rounded-xl border border-[#242424] bg-[#151515] p-3">
-                        <span className="flex h-10 w-10 items-center justify-center rounded-full bg-[#333333] text-white">
+                    <div className="mb-2 flex items-center gap-3 rounded-xl border border-telegram-border bg-telegram-hover p-3 transition-colors">
+                        <span className="flex h-10 w-10 items-center justify-center rounded-full bg-telegram-primary/20 text-telegram-primary">
                             {getMediaIcon(attachmentDraft.mediaType)}
                         </span>
                         <div className="min-w-0 flex-1">
-                            <p className="truncate text-sm font-medium text-white">{attachmentDraft.name}</p>
-                            <p className="text-xs text-[#8a8a8a]">Add a caption, then send</p>
+                            <p className="truncate text-sm font-medium text-telegram-text">{attachmentDraft.name}</p>
+                            <p className="text-xs text-telegram-subtext">Add a caption, then send</p>
                         </div>
                         <button
                             onClick={() => setAttachmentDraft(null)}
-                            className="rounded-full p-2 text-[#8a8a8a] hover:bg-white/5 hover:text-white"
+                            className="rounded-full p-2 text-telegram-subtext hover:bg-telegram-border hover:text-telegram-text transition-colors"
                         >
                             <X className="h-4 w-4" />
                         </button>
                     </div>
                 )}
                 {mentionOptions.length > 0 && (
-                    <div className="absolute bottom-[74px] left-14 w-72 overflow-hidden rounded-xl border border-[#242424] bg-[#0f0f0f] shadow-2xl">
+                    <div className="absolute bottom-[74px] left-14 w-72 overflow-hidden rounded-xl border border-telegram-border bg-telegram-surface shadow-2xl z-50 transition-colors">
                         {mentionOptions.map(option => (
                             <button
                                 key={option.label}
                                 onClick={() => handleMentionSelect(option.label)}
-                                className="flex w-full items-center gap-3 px-3 py-2 text-left hover:bg-white/5"
+                                className="flex w-full items-center gap-3 px-3 py-2 text-left hover:bg-telegram-hover transition-colors"
                             >
-                                <span className="flex h-8 w-8 items-center justify-center rounded-full bg-[#2a2a2a] text-xs font-semibold text-white">
+                                <span className="flex h-8 w-8 items-center justify-center rounded-full bg-telegram-primary/10 text-xs font-semibold text-telegram-primary">
                                     {option.label === '@all' ? 'ALL' : option.description.charAt(0).toUpperCase()}
                                 </span>
                                 <span className="min-w-0">
-                                    <span className="block truncate text-sm text-white">{option.label}</span>
-                                    <span className="block truncate text-xs text-[#8a8a8a]">{option.description}</span>
+                                    <span className="block truncate text-sm text-telegram-text">{option.label}</span>
+                                    <span className="block truncate text-xs text-telegram-subtext">{option.description}</span>
                                 </span>
                             </button>
                         ))}
                     </div>
                 )}
                 {showEmojiPicker && (
-                    <div className="absolute bottom-[74px] right-14 grid w-64 grid-cols-6 gap-1 rounded-xl border border-[#242424] bg-[#0f0f0f] p-2 shadow-2xl">
+                    <div className="absolute bottom-[74px] right-14 grid w-64 grid-cols-6 gap-1 rounded-xl border border-telegram-border bg-telegram-surface p-2 shadow-2xl z-50 transition-colors">
                         {emojis.map(emoji => (
                             <button
                                 key={emoji}
@@ -798,7 +798,7 @@ export function TeamChat({
                                     setShowEmojiPicker(false);
                                     requestAnimationFrame(() => inputRef.current?.focus());
                                 }}
-                                className="rounded-lg p-2 text-xl hover:bg-white/5"
+                                className="rounded-lg p-2 text-xl hover:bg-telegram-hover transition-colors"
                             >
                                 {emoji}
                             </button>
@@ -806,7 +806,7 @@ export function TeamChat({
                     </div>
                 )}
                 {recording ? (
-                    <div className="flex items-center gap-3 rounded-[22px] border border-red-500/40 bg-[#181818] px-4 py-3 text-white">
+                    <div className="flex items-center gap-3 rounded-[22px] border border-red-500/40 bg-telegram-hover px-4 py-3 text-telegram-text transition-colors">
                         <span className="h-3 w-3 rounded-full bg-red-500 animate-pulse" />
                         <div className="flex flex-1 items-center gap-1">
                             {Array.from({ length: 18 }).map((_, index) => (
@@ -817,7 +817,7 @@ export function TeamChat({
                                 />
                             ))}
                         </div>
-                        <span className="text-xs text-[#d0d0d0]">
+                        <span className="text-xs text-telegram-subtext">
                             {recordingSeconds}s
                         </span>
                         <button onClick={handleVoice} className="rounded-full bg-red-500 px-3 py-1.5 text-xs font-medium text-white">
@@ -825,16 +825,16 @@ export function TeamChat({
                         </button>
                     </div>
                 ) : (
-                <div className="flex items-end gap-2 rounded-[22px] bg-[#181818] px-2 py-2 border border-[#242424]">
+                <div className="flex items-end gap-2 rounded-[22px] bg-telegram-hover px-2 py-2 border border-telegram-border transition-colors">
                     <button
                         onClick={handleAttach}
                         disabled={uploading}
-                        className="p-2 text-[#8a8a8a] hover:text-white rounded-full transition-colors disabled:opacity-50"
+                        className="p-2 text-telegram-subtext hover:text-telegram-text rounded-full transition-colors disabled:opacity-50"
                         title="Attach"
                     >
                         <Paperclip className={`w-5 h-5 ${uploading ? 'animate-pulse' : ''}`} />
                     </button>
-                    <button onClick={handleMention} className="p-2 text-[#8a8a8a] hover:text-white rounded-full transition-colors" title="Mention">
+                    <button onClick={handleMention} className="p-2 text-telegram-subtext hover:text-telegram-text rounded-full transition-colors" title="Mention">
                         <AtSign className="w-5 h-5" />
                     </button>
                     <input
@@ -844,13 +844,13 @@ export function TeamChat({
                         onChange={(e) => setNewMessage(e.target.value)}
                         onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && (e.preventDefault(), handleSend())}
                         placeholder="Message"
-                        className="min-h-10 flex-1 bg-transparent px-1 py-2 text-sm text-white placeholder:text-[#8a8a8a] outline-none"
+                        className="min-h-10 flex-1 bg-transparent px-1 py-2 text-sm text-telegram-text placeholder:text-telegram-subtext outline-none"
                         disabled={sending}
                     />
-                    <button onClick={() => setShowEmojiPicker(value => !value)} className="p-2 text-[#8a8a8a] hover:text-white rounded-full transition-colors" title="Emoji">
+                    <button onClick={() => setShowEmojiPicker(value => !value)} className="p-2 text-telegram-subtext hover:text-telegram-text rounded-full transition-colors" title="Emoji">
                         <Smile className="w-5 h-5" />
                     </button>
-                    <button onClick={handleVoice} className={`p-2 rounded-full transition-colors ${recording ? 'bg-red-500 text-white animate-pulse' : 'text-[#8a8a8a] hover:text-white'}`} title={recording ? 'Stop and send voice' : 'Voice'}>
+                    <button onClick={handleVoice} className={`p-2 rounded-full transition-colors ${recording ? 'bg-red-500 text-white animate-pulse' : 'text-telegram-subtext hover:text-telegram-text'}`} title={recording ? 'Stop and send voice' : 'Voice'}>
                         <Mic className="w-5 h-5" />
                     </button>
                     <button

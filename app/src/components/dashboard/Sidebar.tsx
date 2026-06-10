@@ -326,7 +326,7 @@ export function Sidebar({
                                             <input
                                                 autoFocus
                                                 type="text"
-                                                className="w-full bg-white/5 rounded-lg px-3 py-2 text-sm text-white border border-telegram-border focus:outline-none focus:ring-1 focus:ring-telegram-primary"
+                                                className="w-full bg-telegram-hover rounded-lg px-3 py-2 text-sm text-telegram-text border border-telegram-border focus:outline-none focus:ring-1 focus:ring-telegram-primary"
                                                 placeholder="Folder Name"
                                                 value={newFolderName}
                                                 onChange={e => setNewFolderName(e.target.value)}

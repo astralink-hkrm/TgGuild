@@ -97,7 +97,7 @@ function AppContent() {
     <main className="h-screen w-screen text-telegram-text overflow-hidden selection:bg-telegram-primary/30 relative flex flex-col bg-telegram-bg">
       <div
         data-tauri-drag-region
-        className="h-10 shrink-0 flex items-center justify-end border-b border-[#1f1f1f] bg-[#050505] select-none relative z-[10000]"
+        className="h-10 shrink-0 flex items-center justify-end border-b border-telegram-border bg-telegram-bg select-none relative z-[10000] transition-colors duration-300"
       >
         <div data-tauri-drag-region className="min-w-0 flex-1 h-full" />
         <WindowControls />

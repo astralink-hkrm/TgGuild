@@ -218,7 +218,7 @@ export function FileExplorer({
 
     if (loading) {
         return (
-            <div className="flex-1 p-6 flex justify-center items-center text-telegram-subtext flex-col gap-4">
+            <div className="flex-1 p-6 flex justify-center items-center text-telegram-subtext flex-col gap-4 bg-telegram-bg transition-colors duration-300">
                 <div className="w-8 h-8 border-4 border-telegram-primary border-t-transparent rounded-full animate-spin"></div>
                 Loading your files...
             </div>
@@ -226,14 +226,14 @@ export function FileExplorer({
     }
 
     if (error) {
-        return <div className="flex-1 p-6 flex justify-center items-center text-red-400">Error loading files</div>
+        return <div className="flex-1 p-6 flex justify-center items-center text-red-400 bg-telegram-bg transition-colors duration-300">Error loading files</div>
     }
 
     if (files.length === 0) {
         return (
             <div
                 ref={parentRef}
-                className="flex-1 p-6 overflow-auto"
+                className="flex-1 p-6 overflow-auto bg-telegram-bg transition-colors duration-300"
                 onClick={(e) => {
                     e.stopPropagation();
                     if (e.target === e.currentTarget) onSelectionClear();
@@ -250,7 +250,7 @@ export function FileExplorer({
     return (
         <div
             ref={parentRef}
-            className="flex-1 p-6 overflow-auto custom-scrollbar"
+            className="flex-1 p-6 overflow-auto custom-scrollbar bg-telegram-bg transition-colors duration-300"
             onClick={(e) => {
                 e.stopPropagation();
                 if (e.target === e.currentTarget) onSelectionClear();
@@ -451,7 +451,7 @@ function SortControls({
                 <button
                     key={field}
                     onClick={() => handleSort(field)}
-                    className={`flex items-center gap-1 rounded px-2 py-1 capitalize transition-colors hover:bg-white/5 ${sortField === field ? 'text-telegram-primary' : ''}`}
+                    className={`flex items-center gap-1 rounded px-2 py-1 capitalize transition-colors hover:bg-telegram-hover ${sortField === field ? 'text-telegram-primary' : ''}`}
                 >
                     {field} <SortIcon field={field} />
                 </button>
