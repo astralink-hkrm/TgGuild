@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TgGuild Docs — Home</title>
+<style>
+  *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+  html { font-size: 16px; }
+  body {
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    background: #0a0a0f;
+    color: #e0e0e0;
+    display: flex;
+    min-height: 100vh;
+    line-height: 1.7;
+  }
+
+  .sidebar {
+    width: 280px;
+    min-width: 280px;
+    background: #0d0d14;
+    border-right: 1px solid #1a1a2e;
+    padding: 2rem 0;
+    height: 100vh;
+    position: sticky;
+    top: 0;
+    overflow-y: auto;
+    box-shadow: 2px 0 20px rgba(0, 255, 255, 0.05);
+  }
+  .sidebar-header {
+    padding: 0 1.5rem 1.5rem;
+    border-bottom: 1px solid #1a1a2e;
+    margin-bottom: 1rem;
+  }
+  .sidebar-header h2 {
+    font-size: 1.1rem;
+    background: linear-gradient(135deg, #00fff7, #ff00e4, #ffee00);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    letter-spacing: 0.5px;
+  }
+  .sidebar-header p {
+    font-size: 0.75rem;
+    color: #666;
+    margin-top: 0.25rem;
+    -webkit-text-fill-color: #666;
+  }
+  .sidebar a {
+    display: block;
+    padding: 0.6rem 1.5rem;
+    color: #888;
+    text-decoration: none;
+    font-size: 0.85rem;
+    border-left: 3px solid transparent;
+    transition: all 0.2s;
+  }
+  .sidebar a:hover {
+    color: #00fff7;
+    background: rgba(0, 255, 247, 0.04);
+    border-left-color: #00fff7;
+  }
+
+  .content {
+    flex: 1;
+    padding: 3rem 4rem;
+    max-width: 960px;
+  }
+
+  h1 {
+    font-size: 2.2rem;
+    margin-bottom: 0.5rem;
+    background: linear-gradient(135deg, #00fff7, #ff00e4);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+  .subtitle {
+    color: #666;
+    margin-bottom: 2rem;
+    font-size: 0.95rem;
+  }
+
+  .doc-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 1rem;
+  }
+  .doc-card {
+    background: #0d0d16;
+    border: 1px solid #1a1a2e;
+    border-radius: 12px;
+    padding: 1.5rem;
+    text-decoration: none;
+    color: #e0e0e0;
+    transition: all 0.25s;
+    position: relative;
+    overflow: hidden;
+  }
+  .doc-card::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0;
+    right: 0;
+    height: 3px;
+    background: linear-gradient(90deg, #00fff7, #ff00e4);
+    opacity: 0;
+    transition: opacity 0.25s;
+  }
+  .doc-card:hover {
+    border-color: #00fff7;
+    transform: translateY(-2px);
+    box-shadow: 0 4px 25px rgba(0, 255, 247, 0.1);
+  }
+  .doc-card:hover::before { opacity: 1; }
+  .doc-card h3 {
+    color: #00fff7;
+    margin-bottom: 0.5rem;
+    font-size: 1rem;
+  }
+  .doc-card p {
+    color: #888;
+    font-size: 0.85rem;
+    line-height: 1.5;
+  }
+
+  hr {
+    border: none;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, #00fff7, #ff00e4, transparent);
+    margin: 2rem 0;
+  }
+
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { background: #0a0a0f; }
+  ::-webkit-scrollbar-thumb { background: #1a1a2e; border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: #00fff7; }
+
+  @media (max-width: 768px) {
+    body { flex-direction: column; }
+    .sidebar {
+      width: 100%;
+      min-width: unset;
+      height: auto;
+      position: static;
+      padding: 1rem 0;
+      border-right: none;
+      border-bottom: 1px solid #1a1a2e;
+    }
+    .content { padding: 1.5rem; }
+    h1 { font-size: 1.6rem; }
+  }
+</style>
+</head>
+<body>
+  <nav class="sidebar">
+    <div class="sidebar-header">
+      <h2>TgGuild Docs</h2>
+      <p>Documentation &amp; Analysis</p>
+    </div>
+          <a href="readme.html">TgGuild — Full Codebase Architecture</a>
+          <a href="architecture.html">TgGuild — Full Codebase Architecture</a>
+          <a href="root-readme.html">`README.md` — Project Landing Page</a>
+          <a href="root-changelog.html">`CHANGELOG.md` — Version History</a>
+          <a href="root-gitignore.html">`.gitignore` — Git Ignore Rules</a>
+          <a href="root-gitattributes.html">`.gitattributes` — Git Attributes</a>
+          <a href="root-run-ps1.html">`run.ps1` — Development Launcher</a>
+          <a href="root-rustup-init-exe.html">`rustup-init.exe` — Rust Installer</a>
+          <a href="root-package-lock-json.html">`package-lock.json` — Root Package Lock</a>
+  </nav>
+  <main class="content">
+    <h1>TgGuild Documentation</h1>
+    <p class="subtitle">Full codebase architecture, analysis, and reference</p>
+    <hr>
+    <div class="doc-grid">
+        <a href="readme.html" class="doc-card">
+          <h3>TgGuild — Full Codebase Architecture</h3>
+          <p>Overview</p>
+        </a>
+        <a href="architecture.html" class="doc-card">
+          <h3>TgGuild — Full Codebase Architecture</h3>
+          <p>Overview</p>
+        </a>
+        <a href="root-readme.html" class="doc-card">
+          <h3>`README.md` — Project Landing Page</h3>
+          <p>- Purpose: Public-facing project description and install instructions - Key content:</p>
+        </a>
+        <a href="root-changelog.html" class="doc-card">
+          <h3>`CHANGELOG.md` — Version History</h3>
+          <p>- Purpose: Track all releases from v1.1.3 to v1.3.28 - Structure: Reverse chronological, each version with date and lis</p>
+        </a>
+        <a href="root-gitignore.html" class="doc-card">
+          <h3>`.gitignore` — Git Ignore Rules</h3>
+          <p>- Location: Root .gitignore - Ignored patterns:</p>
+        </a>
+        <a href="root-gitattributes.html" class="doc-card">
+          <h3>`.gitattributes` — Git Attributes</h3>
+          <p>- Location: Root .gitattributes - Content:  text=auto</p>
+        </a>
+        <a href="root-run-ps1.html" class="doc-card">
+          <h3>`run.ps1` — Development Launcher</h3>
+          <p>- Purpose: PowerShell script to start the app in dev mode - Contents: Set-Location -LiteralPath "app"; if ($?) { npm ru</p>
+        </a>
+        <a href="root-rustup-init-exe.html" class="doc-card">
+          <h3>`rustup-init.exe` — Rust Installer</h3>
+          <p>- Location: Root rustup-init.exe - Purpose: Bundled Rust toolchain installer (for Windows users who don't have Rust)</p>
+        </a>
+        <a href="root-package-lock-json.html" class="doc-card">
+          <h3>`package-lock.json` — Root Package Lock</h3>
+          <p>- Location: Root package-lock.json - Purpose: Lockfile for root-level (no packages required)</p>
+        </a>
+    </div>
+  </main>
+</body>
+</html>

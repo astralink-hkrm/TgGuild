@@ -1,0 +1,476 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TgGuild — Full Codebase Architecture — TgGuild Docs</title>
+<style>
+  *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+  html { font-size: 16px; scroll-behavior: smooth; }
+  body {
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    background: #0a0a0f;
+    color: #e0e0e0;
+    display: flex;
+    min-height: 100vh;
+    line-height: 1.7;
+  }
+
+  /* === SIDEBAR === */
+  .sidebar {
+    width: 280px;
+    min-width: 280px;
+    background: #0d0d14;
+    border-right: 1px solid #1a1a2e;
+    padding: 2rem 0;
+    height: 100vh;
+    position: sticky;
+    top: 0;
+    overflow-y: auto;
+    box-shadow: 2px 0 20px rgba(0, 255, 255, 0.05);
+  }
+  .sidebar-header {
+    padding: 0 1.5rem 1.5rem;
+    border-bottom: 1px solid #1a1a2e;
+    margin-bottom: 1rem;
+  }
+  .sidebar-header h2 {
+    font-size: 1.1rem;
+    background: linear-gradient(135deg, #00fff7, #ff00e4, #ffee00);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    letter-spacing: 0.5px;
+  }
+  .sidebar-header p {
+    font-size: 0.75rem;
+    color: #666;
+    margin-top: 0.25rem;
+    -webkit-text-fill-color: #666;
+  }
+  .sidebar a {
+    display: block;
+    padding: 0.6rem 1.5rem;
+    color: #888;
+    text-decoration: none;
+    font-size: 0.85rem;
+    border-left: 3px solid transparent;
+    transition: all 0.2s;
+  }
+  .sidebar a:hover {
+    color: #00fff7;
+    background: rgba(0, 255, 247, 0.04);
+    border-left-color: #00fff7;
+  }
+  .sidebar a.active {
+    color: #fff;
+    background: rgba(0, 255, 247, 0.08);
+    border-left-color: #00fff7;
+    box-shadow: inset 0 0 15px rgba(0, 255, 247, 0.05);
+  }
+
+  /* === MAIN CONTENT === */
+  .content {
+    flex: 1;
+    padding: 3rem 4rem;
+    max-width: 960px;
+    position: relative;
+  }
+  .content::before {
+    content: '';
+    position: fixed;
+    top: -50%;
+    left: -50%;
+    width: 200%;
+    height: 200%;
+    background:
+      radial-gradient(ellipse at 20% 50%, rgba(0, 255, 247, 0.03) 0%, transparent 50%),
+      radial-gradient(ellipse at 80% 20%, rgba(255, 0, 228, 0.03) 0%, transparent 50%),
+      radial-gradient(ellipse at 50% 80%, rgba(255, 238, 0, 0.02) 0%, transparent 50%);
+    pointer-events: none;
+    z-index: 0;
+  }
+  .content > * { position: relative; z-index: 1; }
+
+  /* === TYPOGRAPHY === */
+  h1 {
+    font-size: 2.2rem;
+    margin-bottom: 1.5rem;
+    padding-bottom: 0.75rem;
+    border-bottom: 2px solid #1a1a2e;
+    background: linear-gradient(135deg, #00fff7, #ff00e4);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+  h2 {
+    font-size: 1.5rem;
+    margin: 2rem 0 1rem;
+    color: #00fff7;
+    border-left: 4px solid #00fff7;
+    padding-left: 0.75rem;
+    box-shadow: -4px 0 15px rgba(0, 255, 247, 0.1);
+  }
+  h3 {
+    font-size: 1.2rem;
+    margin: 1.5rem 0 0.75rem;
+    color: #ff00e4;
+    border-left: 3px solid #ff00e4;
+    padding-left: 0.6rem;
+  }
+  h4 {
+    color: #ffee00;
+    margin: 1rem 0 0.5rem;
+  }
+  p { margin-bottom: 1rem; }
+  a {
+    color: #00fff7;
+    text-decoration: none;
+    box-shadow: 0 1px 0 rgba(0, 255, 247, 0.3);
+  }
+  a:hover { color: #fff; box-shadow: 0 1px 0 #00fff7; }
+
+  strong { color: #fff; }
+
+  /* === CODE === */
+  code {
+    background: #12121e;
+    color: #ff00e4;
+    padding: 0.15rem 0.4rem;
+    border-radius: 4px;
+    font-size: 0.85em;
+    border: 1px solid #1a1a2e;
+  }
+  pre {
+    background: #0d0d16;
+    border: 1px solid #1a1a2e;
+    border-radius: 8px;
+    padding: 1.25rem;
+    margin: 1rem 0;
+    overflow-x: auto;
+    position: relative;
+    box-shadow: 0 0 20px rgba(0, 255, 247, 0.03);
+  }
+  pre code {
+    background: none;
+    border: none;
+    padding: 0;
+    color: #c0c0d0;
+  }
+
+  /* === TABLES === */
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 1rem 0;
+  }
+  th, td {
+    border: 1px solid #1a1a2e;
+    padding: 0.6rem 1rem;
+    text-align: left;
+  }
+  th {
+    background: #0d0d16;
+    color: #00fff7;
+  }
+  tr:nth-child(even) { background: rgba(0, 255, 247, 0.02); }
+
+  /* === LISTS === */
+  ul, ol { padding-left: 1.5rem; margin-bottom: 1rem; }
+  li { margin-bottom: 0.3rem; }
+  li::marker { color: #ff00e4; }
+
+  /* === HORIZONTAL RULES === */
+  hr {
+    border: none;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, #00fff7, #ff00e4, transparent);
+    margin: 2rem 0;
+  }
+
+  /* === BLOCKQUOTES === */
+  blockquote {
+    border-left: 3px solid #ffee00;
+    padding-left: 1rem;
+    margin: 1rem 0;
+    color: #aaa;
+    background: rgba(255, 238, 0, 0.03);
+    padding: 0.75rem 1rem;
+    border-radius: 0 8px 8px 0;
+  }
+
+  /* === SCROLLBAR === */
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { background: #0a0a0f; }
+  ::-webkit-scrollbar-thumb { background: #1a1a2e; border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: #00fff7; }
+
+  /* === RESPONSIVE === */
+  @media (max-width: 768px) {
+    body { flex-direction: column; }
+    .sidebar {
+      width: 100%;
+      min-width: unset;
+      height: auto;
+      position: static;
+      padding: 1rem 0;
+      border-right: none;
+      border-bottom: 1px solid #1a1a2e;
+    }
+    .content { padding: 1.5rem; }
+    h1 { font-size: 1.6rem; }
+    h2 { font-size: 1.2rem; }
+  }
+</style>
+</head>
+<body>
+  <nav class="sidebar">
+    <div class="sidebar-header">
+      <h2>TgGuild Docs</h2>
+      <p>Documentation &amp; Analysis</p>
+    </div>
+          <a href="readme.html" class="active">TgGuild — Full Codebase Architecture</a>
+          <a href="architecture.html" >TgGuild — Full Codebase Architecture</a>
+          <a href="root-readme.html" >`README.md` — Project Landing Page</a>
+          <a href="root-changelog.html" >`CHANGELOG.md` — Version History</a>
+          <a href="root-gitignore.html" >`.gitignore` — Git Ignore Rules</a>
+          <a href="root-gitattributes.html" >`.gitattributes` — Git Attributes</a>
+          <a href="root-run-ps1.html" >`run.ps1` — Development Launcher</a>
+          <a href="root-rustup-init-exe.html" >`rustup-init.exe` — Rust Installer</a>
+          <a href="root-package-lock-json.html" >`package-lock.json` — Root Package Lock</a>
+    <div style="margin-top:auto;padding:1rem 1.5rem;border-top:1px solid #1a1a2e;margin-top:1rem;">
+      <a href="index.html" style="font-size:0.8rem;color:#555;border-left-color:transparent;">&larr; Home</a>
+    </div>
+  </nav>
+  <main class="content">
+<h1>TgGuild — Full Codebase Architecture</h1>
+<h2>Overview</h2>
+<p>TgGuild v1.3.28 is a <strong>Tauri v2 desktop application</strong> that provides a cloud storage and collaboration platform on top of <strong>Telegram&#39;s MTProto API</strong>. It uses a user&#39;s Telegram account (Saved Messages + group chats) as a virtual filesystem — files are uploaded as Telegram messages, and a JSON-based virtual folder system (stored in message text) tracks the tree structure.</p>
+<pre><code>┌─────────────────────────────────────────────────┐
+│                  Tauri v2 Shell                   │
+│  ┌──────────────────┐  ┌─────────────────────┐  │
+│  │   React Frontend  │  │   Rust Backend       │  │
+│  │   (Vite + Tailwind│  │   (grammers MTProto) │  │
+│  │    + TanStack Q)  │  │   + Actix Streaming  │  │
+│  └──────┬───────────┘  └──────────┬──────────┘  │
+│         │      Tauri IPC (invoke) │              │
+│         └─────────────────────────┘              │
+└─────────────────────────────────────────────────┘
+</code></pre>
+<h3>Core Architecture</h3>
+<ul>
+<li><strong>Frontend</strong>: React 19 + TypeScript, Vite dev server (port 1420), Tailwind v4, Framer Motion, TanStack Query v5, PDF.js, QRCode.js</li>
+<li><strong>Backend</strong>: Rust with Tauri v2, grammers-client for Telegram MTProto, Actix-web for media streaming (port 14201)</li>
+<li><strong>Build target</strong>: Windows (MSI), Linux (AppImage/deb), macOS (DMG)</li>
+<li><strong>CI</strong>: GitHub Actions — auto-builds on push to <code>main</code></li>
+</ul>
+<h3>Key Design Decisions</h3>
+<table>
+<thead>
+<tr>
+<th>Decision</th>
+<th>Rationale</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Virtual folders as JSON messages</td>
+<td>No external DB needed; Telegram drives are self-contained</td>
+</tr>
+<tr>
+<td>Saved Messages as root drive</td>
+<td>Always available, no team/chat dependency</td>
+</tr>
+<tr>
+<td>Grammers MTProto client</td>
+<td>Full Telegram API access vs Bot API limitations</td>
+</tr>
+<tr>
+<td>Actix-web streaming server</td>
+<td>Separate HTTP server for media range requests</td>
+</tr>
+<tr>
+<td>Bandwidth tracking (250GB/day)</td>
+<td>Soft limit per Telegram drive account</td>
+</tr>
+<tr>
+<td>LRU thumbnail cache (30 files, 80MB)</td>
+<td>Prevents disk bloat from previews</td>
+</tr>
+<tr>
+<td>Session runners per drive</td>
+<td>Each API ID pair gets its own grammers network runner</td>
+</tr>
+</tbody></table>
+<h3>Communication Flow</h3>
+<pre><code>User Action → React Component → TanStack Query Mutation
+  → Tauri IPC invoke() → Rust Command (async)
+    → grammers MTProto call → Telegram DC Response
+  → Progress Tauri Events → React Query Cache Update
+→ UI Re-render
+</code></pre>
+<h3>Virtual Filesystem Protocol</h3>
+<p>Messages in Telegram chats are tagged with prefixes:</p>
+<ul>
+<li><code>TGGuild_FOLDER_V1:{json_metadata}</code> — virtual folder marker</li>
+<li><code>TGGuild_FILE_V1:{json_metadata}</code> — file placeholder marker</li>
+<li><code>TGGUILD_TREE_V1:{json_tree}</code> — folder tree structure</li>
+</ul>
+<p>The tree is fully materialized on each load from these markers.</p>
+<h3>Security Model</h3>
+<ul>
+<li><strong>Auth</strong>: Phone → Code → 2FA Password flow via Telegram MTProto</li>
+<li><strong>API ID</strong>: Encrypted in Tauri Store (<code>api_id.enc</code> key)</li>
+<li><strong>Streaming tokens</strong>: Random 32-char hex per session, validated on each request</li>
+<li><strong>CSP</strong>: Restricted to allow only localhost:14201 for media</li>
+<li><strong>Sessions</strong>: SQLite session files per API ID, stored in app data directory</li>
+</ul>
+<hr>
+<h2>Directory Map</h2>
+<pre><code>TgGuild/
+├── app/                          # Main application
+│   ├── src/                      # React frontend source
+│   │   ├── main.tsx              # Entry point
+│   │   ├── App.tsx               # Root component (orchestrator)
+│   │   ├── App.css               # Global styles + Tailwind
+│   │   ├── types.ts              # TypeScript interfaces
+│   │   ├── utils.ts              # Utility functions
+│   │   ├── components/           # React components
+│   │   │   ├── AuthWizard.tsx    # Auth flow (phone→code→password)
+│   │   │   ├── Dashboard.tsx     # Main workspace orchestrator
+│   │   │   ├── ErrorBoundary.tsx # Error boundary
+│   │   │   ├── FileTypeIcon.tsx  # File type icon mapper
+│   │   │   ├── ThemeToggle.tsx   # Dark/light toggle
+│   │   │   ├── UpdateBanner.tsx  # Update notification
+│   │   │   ├── WindowControls.tsx# Custom titlebar buttons
+│   │   │   └── dashboard/        # Dashboard sub-components
+│   │   │       ├── Sidebar.tsx, TopBar.tsx, FileExplorer.tsx
+│   │   │       ├── FileCard.tsx, FileListItem.tsx
+│   │   │       ├── ContextMenu.tsx, EmptyState.tsx
+│   │   │       ├── UploadQueue.tsx, DownloadQueue.tsx
+│   │   │       ├── BatchDownloadCard.tsx
+│   │   │       ├── PreviewModal.tsx, MediaPlayer.tsx, PdfViewer.tsx
+│   │   │       ├── TeamChat.tsx, TeamsPanel.tsx
+│   │   │       ├── RenameModal.tsx, CreateFolderModal.tsx
+│   │   │       ├── MoveToFolderModal.tsx, ShareFilesModal.tsx
+│   │   │       ├── DragDropOverlay.tsx, ExternalDropBlocker.tsx
+│   │   │       ├── SidebarItem.tsx, MemberStack.tsx
+│   │   │       ├── TelegramAvatar.tsx, BandwidthWidget.tsx
+│   │   │       ├── AddSubscriberModal.tsx
+│   │   │       ├── TeamVisibilityModal.tsx
+│   │   │       ├── OpeningOverlay.tsx
+│   │   │       ├── teamVisibility.ts, telegramCache.ts
+│   │   │       └── teams/ (subdir)
+│   │   ├── context/
+│   │   │   ├── ThemeContext.tsx
+│   │   │   └── ConfirmContext.tsx
+│   │   ├── contexts/
+│   │   │   └── DropZoneContext.tsx
+│   │   └── hooks/
+│   │       ├── useFileOperations.ts
+│   │       ├── useTelegramConnection.ts
+│   │       ├── useFileUpload.ts
+│   │       ├── useFileDownload.ts
+│   │       ├── useUpdateCheck.ts
+│   │       ├── useNetworkStatus.ts
+│   │       ├── useKeyboardShortcuts.ts
+│   │       └── useFileDrop.ts
+│   ├── src-tauri/                # Rust backend
+│   │   ├── src/
+│   │   │   ├── main.rs           # Linux EGL fix + app entry
+│   │   │   ├── lib.rs            # Tauri app builder + state init
+│   │   │   ├── models.rs         # Rust data structures
+│   │   │   ├── bandwidth.rs      # Bandwidth tracker
+│   │   │   ├── server.rs         # Actix-web streaming server
+│   │   │   └── commands/
+│   │   │       ├── mod.rs        # Module exports + TelegramState
+│   │   │       ├── auth.rs       # Auth commands + runner lifecycle
+│   │   │       ├── fs.rs         # Filesystem commands (~2300 lines)
+│   │   │       ├── teams.rs      # Teams/chat commands (~1800 lines)
+│   │   │       ├── preview.rs    # Thumbnail/preview cache
+│   │   │       ├── streaming.rs  # Stream token management
+│   │   │       ├── network.rs    # Network availability check
+│   │   │       └── utils.rs      # Peer resolution helpers
+│   │   ├── tauri.conf.json       # Tauri configuration
+│   │   ├── capabilities/default.json  # Permissions
+│   │   ├── build.rs              # Tauri build script
+│   │   └── Cargo.toml            # Rust dependencies
+│   ├── scripts/version-bump.js   # Version bumper
+│   ├── package.json              # Node dependencies
+│   ├── vite.config.ts            # Vite configuration
+│   ├── tsconfig.json             # TypeScript config
+│   ├── index.html                # HTML entry
+│   └── postcss.config.js         # PostCSS config
+├── .github/workflows/autobuild.yml  # CI pipeline
+├── .gemini/settings.json         # Gemini settings
+├── README.md                     # Project README
+├── CHANGELOG.md                  # Version history
+├── run.ps1                       # Dev launcher
+└── screenshots/                  # App screenshots
+</code></pre>
+<hr>
+<h2>Data Flow Diagrams</h2>
+<h3>Authentication Flow</h3>
+<pre><code>User → AuthWizard (PhoneInput)
+     → invoke(&quot;start_login&quot;, { phone })
+     → Rust: send_code request to Telegram DC
+     ← AuthWizard (CodeInput)
+     → invoke(&quot;verify_code&quot;, { code })
+     → Rust: sign_in request
+     ← If 2FA required → AuthWizard (PasswordInput)
+     → invoke(&quot;verify_password&quot;, { password })
+     → Rust: check_password request
+     ← AuthSession → App.tsx: setLoggedIn(true)
+     → Dashboard mounts
+</code></pre>
+<h3>File Upload Flow</h3>
+<pre><code>User → FileExplorer/UploadQueue
+     → useFileUpload.openDialog()
+     → Tauri dialog.open() → file paths
+     → invoke(&quot;upload_file&quot;, { folder_id, file_path, message_text })
+     → Rust: reads file, splits into chunks
+     → uploads via grammers (sequential/smart chunking)
+     → emits &quot;upload-progress&quot; events
+     ← Rust: returns FileMetadata
+     → React Query invalidation → UI update
+</code></pre>
+<h3>File Download Flow</h3>
+<pre><code>User → FileExplorer (click download / open)
+     → useFileDownload.downloadFile()
+     → invoke(&quot;download_file&quot;, { message_id, folder_id })
+     → Rust: reads from Telegram via grammers
+     → emits &quot;download-progress&quot; events
+     → writes to temp file in appdata
+     ← Rust: returns file path
+     → shell.open() or save dialog
+</code></pre>
+<h3>Media Streaming Flow</h3>
+<pre><code>User → PreviewModal / MediaPlayer
+     → invoke(&quot;get_stream_token&quot;, { message_id, folder_id })
+     → Rust: generates random 32-char token
+     ← returns { token, stream_url }
+     → Frontend constructs: http://localhost:14201/stream/{folder_id}/{message_id}?token={token}
+     → Actix-web server validates token
+     → streams media via grammers client
+     → Range request support for seeking
+</code></pre>
+<hr>
+<h2>Key Technical Details</h2>
+<ul>
+<li><strong>React 19 + StrictMode</strong>: Dev double-renders caught via <code>mountedRef</code> pattern in useFileDownload</li>
+<li><strong>TanStack Query</strong>: <code>queryKey: [&#39;files&#39;, activeFolderId]</code> — cache invalidated on mutations</li>
+<li><strong>Tauri Events</strong>: <code>listen(&quot;upload-progress&quot;)</code>, <code>listen(&quot;download-progress&quot;)</code> — progress bar updates</li>
+<li><strong>Framer Motion</strong>: <code>AnimatePresence</code> for queues/modals, layout animations for file grid</li>
+<li><strong>Grammers Runner</strong>: Critical <code>runner_shutdown.take()</code> before spawning new runner to prevent stack overflow on repeated auth</li>
+<li><strong>Peer Cache</strong>: <code>HashMap&lt;folder_id, Peer&gt;</code> in TelegramState avoids O(N) dialog scan per file operation</li>
+<li><strong>Virtual Folder Tree</strong>: Each folder creates a message with <code>TGGuild_FOLDER_V1:...</code> text; the full tree is rebuilt from these markers</li>
+<li><strong>Bandwidth Persistence</strong>: <code>bandwidth.json</code> in appdata directory, daily reset at midnight UTC</li>
+<li><strong>Thumbnail Cache</strong>: LRU eviction when exceeding 30 files or 80MB in temp directory</li>
+<li><strong>Preview Prefetch</strong>: <code>Image</code> object preloading, swipe gesture navigation between images</li>
+<li><strong>PDF Streaming</strong>: Range requests via Actix streaming endpoint, PDF.js progressive loading</li>
+<li><strong>Electron Alternative</strong>: Uses Tauri&#39;s webview (WebView2 on Windows, WebKitGTK on Linux)</li>
+<li><strong>Session Isolation</strong>: SQLite files per API ID, separate grammers client instances per account</li>
+</ul>
+
+  </main>
+</body>
+</html>
