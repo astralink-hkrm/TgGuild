@@ -7,11 +7,83 @@ export function formatBytes(bytes: number, decimals = 2) {
     return `${parseFloat((bytes / Math.pow(k, i)).toFixed(dm))} ${sizes[i]}`;
 }
 
+export function parseDate(dateStr: string): Date {
+    const trimmed = dateStr.trim();
+    const hasTimezone = /Z$|[+-]\d{2}:\d{2}$|\sUTC$/i.test(trimmed);
+    const normalized = trimmed.replace(/\sUTC$/, 'Z');
+    const iso = normalized.includes('T') ? normalized : normalized.replace(' ', 'T');
+    const parsed = new Date(hasTimezone ? iso : iso + 'Z');
+    return parsed;
+}
+
+export function formatTime(dateStr: string): string {
+    const parsed = parseDate(dateStr);
+    if (Number.isNaN(parsed.getTime())) {
+        return dateStr.split(' ')[1]?.slice(0, 5) || dateStr;
+    }
+    return parsed.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+export function formatDateSeparator(dateStr: string): string {
+    const parsed = parseDate(dateStr);
+    if (Number.isNaN(parsed.getTime())) {
+        const key = dateStr.split(' ')[0] || dateStr;
+        return key;
+    }
+
+    const sameDayKey = (date: Date) => {
+        const year = date.getFullYear();
+        const month = String(date.getMonth() + 1).padStart(2, '0');
+        const day = String(date.getDate()).padStart(2, '0');
+        return `${year}-${month}-${day}`;
+    };
+
+    const today = new Date();
+    const yesterday = new Date(today);
+    yesterday.setDate(today.getDate() - 1);
+    const key = sameDayKey(parsed);
+
+    if (key === sameDayKey(today)) return 'Today';
+    if (key === sameDayKey(yesterday)) return 'Yesterday';
+
+    return parsed.toLocaleDateString([], {
+        weekday: 'short',
+        month: 'short',
+        day: 'numeric',
+        year: parsed.getFullYear() === today.getFullYear() ? undefined : 'numeric',
+    });
+}
+
+export function dateKey(dateStr: string): string {
+    const parsed = parseDate(dateStr);
+    if (Number.isNaN(parsed.getTime())) {
+        return dateStr.split(' ')[0] || dateStr;
+    }
+    const year = parsed.getFullYear();
+    const month = String(parsed.getMonth() + 1).padStart(2, '0');
+    const day = String(parsed.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+}
+
+export function formatDateOnly(dateStr: string): string {
+    const parts = dateStr.split('-');
+    if (parts.length !== 3) return dateStr;
+    const y = Number(parts[0]);
+    const m = Number(parts[1]);
+    const d = Number(parts[2]);
+    if (!y || !m || !d) return dateStr;
+    const date = new Date(y, m - 1, d);
+    return date.toLocaleDateString([], {
+        month: 'short',
+        day: 'numeric',
+        year: date.getFullYear() === new Date().getFullYear() ? undefined : 'numeric',
+    });
+}
+
 export function formatDisplayDate(value?: string | null) {
     if (!value) return '-';
 
-    const normalized = value.trim().replace(/\sUTC$/, 'Z');
-    const parsed = new Date(normalized.includes('T') ? normalized : normalized.replace(' ', 'T'));
+    const parsed = parseDate(value);
     if (Number.isNaN(parsed.getTime())) return value;
 
     const sameDayKey = (date: Date) => {

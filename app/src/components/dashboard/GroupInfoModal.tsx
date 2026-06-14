@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { X, Copy, Check, Hash, CalendarDays, Users, Info, Edit3, Save, Loader2 } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { toast } from 'sonner';
+import { formatDateOnly } from '../../utils';
 
 interface TeamFullInfo {
     id: number;
@@ -120,7 +121,7 @@ export function GroupInfoModal({ groupId, groupName, onClose }: GroupInfoModalPr
                                 <CalendarDays className="h-5 w-5 text-telegram-primary" />
                                 <div>
                                     <p className="text-xs text-telegram-subtext">Created</p>
-                                    <p className="text-sm font-medium text-telegram-text">{info.creation_date}</p>
+                                    <p className="text-sm font-medium text-telegram-text">{formatDateOnly(info.creation_date)}</p>
                                 </div>
                             </div>
                         </div>

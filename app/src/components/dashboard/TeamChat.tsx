@@ -52,6 +52,7 @@ import { ForwardPickerModal } from './ForwardPickerModal';
 import { StarredMessages } from './StarredMessages';
 import { SelectionBar, SelectionDeleteConfirm } from './SelectionBar';
 import { useRealtime } from '../../hooks/useRealtime';
+import { formatTime, formatDateSeparator, formatDisplayDate, dateKey } from '../../utils';
 
 interface ChatMessage {
     id: number;
@@ -725,52 +726,6 @@ export function TeamChat({
         } finally {
             setDownloadingId(null);
         }
-    };
-
-    const formatTime = (dateStr: string) => {
-        const parsed = parseMessageDate(dateStr);
-        if (!Number.isNaN(parsed.getTime())) {
-            return parsed.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-        }
-        return dateStr.split(' ')[1]?.slice(0, 5) || dateStr;
-    };
-
-    const parseMessageDate = (dateStr: string) => {
-        const normalized = dateStr.trim().replace(/\sUTC$/, 'Z');
-        return new Date(normalized.includes('T') ? normalized : normalized.replace(' ', 'T'));
-    };
-
-    const dateKeyForMessage = (dateStr: string) => {
-        const parsed = parseMessageDate(dateStr);
-        if (Number.isNaN(parsed.getTime())) {
-            return dateStr.split(' ')[0] || dateStr;
-        }
-        const year = parsed.getFullYear();
-        const month = String(parsed.getMonth() + 1).padStart(2, '0');
-        const day = String(parsed.getDate()).padStart(2, '0');
-        return `${year}-${month}-${day}`;
-    };
-
-    const formatDateSeparator = (dateStr: string) => {
-        const parsed = parseMessageDate(dateStr);
-        if (Number.isNaN(parsed.getTime())) {
-            return dateKeyForMessage(dateStr);
-        }
-
-        const today = new Date();
-        const yesterday = new Date(today);
-        yesterday.setDate(today.getDate() - 1);
-        const key = dateKeyForMessage(dateStr);
-
-        if (key === dateKeyForMessage(today.toISOString())) return 'Today';
-        if (key === dateKeyForMessage(yesterday.toISOString())) return 'Yesterday';
-
-        return parsed.toLocaleDateString([], {
-            weekday: 'short',
-            month: 'short',
-            day: 'numeric',
-            year: parsed.getFullYear() === today.getFullYear() ? undefined : 'numeric',
-        });
     };
 
     const formatFileSize = (bytes: number) => {
@@ -1462,8 +1417,8 @@ export function TeamChat({
                         )}
                         {displayMessages.map((msg, index) => {
                             const outgoing = Boolean(msg.outgoing);
-                            const currentDateKey = dateKeyForMessage(msg.date);
-                            const previousDateKey = index > 0 ? dateKeyForMessage(displayMessages[index - 1].date) : null;
+                            const currentDateKey = dateKey(msg.date);
+                            const previousDateKey = index > 0 ? dateKey(displayMessages[index - 1].date) : null;
                             const showDateSeparator = currentDateKey !== previousDateKey;
                             return (
                                 <div key={msg.id} id={`msg-${msg.id}`}>
@@ -1919,7 +1874,7 @@ export function TeamChat({
                             </div>
                             <div>
                                 <span className="text-telegram-subtext text-xs">Sent</span>
-                                <p className="text-telegram-text">{showMessageInfo.date}</p>
+                                <p className="text-telegram-text">{formatDisplayDate(showMessageInfo.date)}</p>
                             </div>
                             {showMessageInfo.edited && (
                                 <div>

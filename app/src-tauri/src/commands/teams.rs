@@ -1798,7 +1798,7 @@ pub async fn cmd_get_team_messages(
             }
         };
 
-        let date_str = msg.date().format("%Y-%m-%d %H:%M:%S").to_string();
+        let date_str = msg.date().to_string();
 
         messages.push(ChatMessage {
             id: msg.id(),
@@ -2467,7 +2467,7 @@ pub async fn cmd_get_user_presence(
                             Some(tl::enums::UserStatus::Online(_)) => (true, None),
                             Some(tl::enums::UserStatus::Offline(off)) => {
                                 let was = chrono::DateTime::from_timestamp(off.was_online as i64, 0)
-                                    .map(|d| d.format("%Y-%m-%d %H:%M:%S").to_string())
+                                    .map(|d| d.to_string())
                                     .unwrap_or_else(|| "recently".to_string());
                                 (false, Some(was))
                             }

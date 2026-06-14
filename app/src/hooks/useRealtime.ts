@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { parseDate } from '../utils';
 
 export interface ReactionData {
     emoji: string;
@@ -295,7 +296,7 @@ export function useRealtime(groupId: number | null, isDirect: boolean) {
         if (presenceData.last_seen === 'last week') return 'last seen last week';
         if (presenceData.last_seen === 'last month') return 'last seen last month';
         if (presenceData.last_seen) {
-            const date = new Date(presenceData.last_seen);
+            const date = parseDate(presenceData.last_seen);
             if (!isNaN(date.getTime())) {
                 return `last seen ${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
             }

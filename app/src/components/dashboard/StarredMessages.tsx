@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { Star, ArrowLeft, MessageSquare, Trash2 } from 'lucide-react';
+import { formatTime } from '../../utils';
 
 interface StarredMessage {
     message_id: number;
@@ -91,7 +92,7 @@ export function StarredMessages({ open, onClose, onJumpToMessage }: StarredMessa
                                         <div className="flex items-center gap-2">
                                             <MessageSquare className="w-3.5 h-3.5 text-telegram-subtext shrink-0" />
                                             <span className="text-xs font-medium text-telegram-primary truncate">{msg.chat_name}</span>
-                                            <span className="text-xs text-telegram-subtext shrink-0">{msg.date}</span>
+                                            <span className="text-xs text-telegram-subtext shrink-0">{formatTime(msg.date)}</span>
                                         </div>
                                         {msg.sender_name && (
                                             <p className="text-xs text-telegram-subtext mt-0.5">{msg.sender_name}</p>

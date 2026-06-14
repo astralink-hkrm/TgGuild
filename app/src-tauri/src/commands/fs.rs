@@ -8,6 +8,8 @@ use grammers_tl_types as tl;
 use std::collections::{HashMap, HashSet};
 use tauri::{Emitter, State};
 
+use chrono::DateTime;
+
 #[derive(Clone, serde::Serialize)]
 struct FolderLoadingProgress {
     folder_id: Option<i64>,
@@ -2130,7 +2132,9 @@ pub async fn cmd_search_global(
                             size,
                             mime_type: Some(mime),
                             file_ext: ext,
-                            created_at: m.date.to_string(),
+                            created_at: DateTime::from_timestamp(m.date as i64, 0)
+                                .map(|d| d.to_string())
+                                .unwrap_or_default(),
                             icon_type: "file".into(),
                         });
                     }
@@ -2188,7 +2192,9 @@ pub async fn cmd_search_global(
                             size,
                             mime_type: Some(mime),
                             file_ext: ext,
-                            created_at: m.date.to_string(),
+                            created_at: DateTime::from_timestamp(m.date as i64, 0)
+                                .map(|d| d.to_string())
+                                .unwrap_or_default(),
                             icon_type: "file".into(),
                         });
                     }
