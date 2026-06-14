@@ -31,6 +31,7 @@ pub struct ActixServerHandle(pub Arc<std::sync::Mutex<Option<actix_web::dev::Ser
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    dotenvy::dotenv().ok();
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("debug")).init();
 
     let stream_token = generate_stream_token();
@@ -50,6 +51,9 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .setup(move |app| {
+            app.manage(tauri::async_runtime::block_on(
+                crate::commands::google::initialize_google_state(),
+            ));
             app.manage(TelegramState {
                 client: Arc::new(Mutex::new(None)),
                 login_token: Arc::new(Mutex::new(None)),
@@ -59,6 +63,7 @@ pub fn run() {
                 runner_count: Arc::new(std::sync::atomic::AtomicU32::new(0)),
                 peer_cache: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
                 cancelled_transfers: Arc::new(tokio::sync::RwLock::new(HashSet::new())),
+                typing_store: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             });
             app.manage(bandwidth::BandwidthManager::new(app.handle()));
             app.manage(StreamConfig {
@@ -140,9 +145,37 @@ pub fn run() {
             commands::cmd_get_team_messages,
             commands::cmd_download_team_media,
             commands::cmd_pin_team_message,
+            commands::cmd_edit_message,
+            commands::cmd_delete_messages,
             commands::cmd_check_admin,
+            commands::cmd_get_team_full_info,
+            commands::cmd_get_team_invite_link,
+            commands::cmd_leave_team,
+            commands::cmd_delete_direct_chat,
             commands::cmd_get_folder_tree,
             commands::cmd_init_folder_trees,
+            commands::cmd_google_auth_url,
+            commands::cmd_google_exchange_code,
+            commands::cmd_google_auth_status,
+            commands::cmd_google_create_meet,
+            commands::cmd_google_disconnect,
+            commands::cmd_send_reaction,
+            commands::cmd_get_message_reactions,
+            commands::cmd_mark_read,
+            commands::cmd_get_message_read_status,
+            commands::cmd_set_typing,
+            commands::cmd_get_typing_status,
+            commands::cmd_record_typing,
+            commands::cmd_update_presence,
+            commands::cmd_get_user_presence,
+            commands::cmd_unpin_team_message,
+            commands::cmd_get_pinned_messages,
+            commands::cmd_get_forward_targets,
+            commands::cmd_forward_messages,
+            commands::cmd_star_message,
+            commands::cmd_unstar_message,
+            commands::cmd_get_starred_messages,
+            commands::cmd_is_message_starred,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

@@ -1,9 +1,11 @@
-use crate::commands::utils::{map_error, resolve_peer};
+use crate::commands::utils::{map_error, resolve_peer, resolve_input_peer};
 use crate::TelegramState;
 use grammers_client::types::Peer;
 use grammers_tl_types as tl;
 use std::collections::{HashMap, HashSet};
 use tauri::State;
+use tauri::Manager;
+use chrono::Utc;
 
 #[derive(Clone, serde::Serialize)]
 pub struct TeamInfo {
@@ -60,6 +62,19 @@ pub struct CurrentTelegramUser {
     pub last_name: Option<String>,
     pub username: Option<String>,
     pub photo_url: Option<String>,
+}
+
+#[derive(Clone, serde::Serialize)]
+pub struct TeamFullInfo {
+    pub id: i64,
+    pub name: String,
+    pub description: String,
+    pub creation_date: String,
+    pub member_count: i32,
+    pub invite_link: Option<String>,
+    pub is_channel: bool,
+    pub is_supergroup: bool,
+    pub can_edit_info: bool,
 }
 
 fn peer_to_input_peer(peer: &Peer) -> Result<tl::enums::InputPeer, String> {
@@ -160,6 +175,8 @@ pub struct ChatMessage {
     pub mime_type: String,
     pub outgoing: bool,
     pub pinned: bool,
+    pub edited: bool,
+    pub audio_duration: Option<f64>,
 }
 
 fn user_has_photo(user: &tl::enums::User) -> bool {
@@ -944,6 +961,239 @@ pub async fn cmd_add_team_member(
 }
 
 #[tauri::command]
+pub async fn cmd_get_team_full_info(
+    team_id: i64,
+    state: State<'_, TelegramState>,
+) -> Result<TeamFullInfo, String> {
+    let client_opt = state.client.lock().await.clone();
+    if client_opt.is_none() {
+        return Err("Not connected".to_string());
+    }
+    let client = client_opt.unwrap();
+
+    let peer = resolve_peer(&client, Some(team_id), &state.peer_cache).await?;
+
+    match &peer {
+        Peer::Channel(c) => {
+            let input_channel = tl::enums::InputChannel::Channel(tl::types::InputChannel {
+                channel_id: c.raw.id,
+                access_hash: c.raw.access_hash.ok_or("No access hash")?,
+            });
+
+            let full = client
+                .invoke(&tl::functions::channels::GetFullChannel {
+                    channel: input_channel,
+                })
+                .await
+                .map_err(|e| format!("Failed to get full channel info: {}", e))?;
+
+            let tl::enums::messages::ChatFull::Full(f) = full;
+            let can_edit = c.raw.creator || c.raw.admin_rights.as_ref().map_or(false, |r| { let tl::enums::ChatAdminRights::Rights(a) = r; a.change_info });
+            let (desc, p_count, exported) = match f.full_chat {
+                tl::enums::ChatFull::ChannelFull(cf) => {
+                    let inv = match cf.exported_invite {
+                        Some(tl::enums::ExportedChatInvite::ChatInviteExported(inv)) => Some(inv.link),
+                        _ => None,
+                    };
+                    (cf.about, cf.participants_count.unwrap_or(0), inv)
+                }
+                tl::enums::ChatFull::Full(cf) => {
+                    let inv = match cf.exported_invite {
+                        Some(tl::enums::ExportedChatInvite::ChatInviteExported(inv)) => Some(inv.link),
+                        _ => None,
+                    };
+                    let count = match cf.participants {
+                        tl::enums::ChatParticipants::Participants(parts) => parts.participants.len() as i32,
+                        _ => 0,
+                    };
+                    (cf.about, count, inv)
+                }
+            };
+            let date_str = chrono::DateTime::from_timestamp(c.raw.date as i64, 0)
+                .map(|d| d.format("%Y-%m-%d").to_string())
+                .unwrap_or_else(|| "Unknown".to_string());
+
+            Ok(TeamFullInfo {
+                id: team_id,
+                name: c.raw.title.clone(),
+                description: desc,
+                creation_date: date_str,
+                member_count: p_count,
+                invite_link: exported,
+                is_channel: true,
+                is_supergroup: c.raw.megagroup,
+                can_edit_info: can_edit,
+            })
+        }
+        Peer::Group(g) => {
+            match &g.raw {
+                tl::enums::Chat::Channel(chan) => {
+                    let input_channel = tl::enums::InputChannel::Channel(tl::types::InputChannel {
+                        channel_id: chan.id,
+                        access_hash: chan.access_hash.ok_or("No access hash")?,
+                    });
+                    let full = client
+                        .invoke(&tl::functions::channels::GetFullChannel {
+                            channel: input_channel,
+                        })
+                        .await
+                        .map_err(|e| format!("Failed to get full channel info: {}", e))?;
+                    let tl::enums::messages::ChatFull::Full(f) = full;
+                    let can_edit = chan.creator || chan.admin_rights.as_ref().map_or(false, |r| { let tl::enums::ChatAdminRights::Rights(a) = r; a.change_info });
+                    let (desc, p_count, exported) = match f.full_chat {
+                        tl::enums::ChatFull::ChannelFull(cf) => {
+                            let inv = match cf.exported_invite {
+                                Some(tl::enums::ExportedChatInvite::ChatInviteExported(inv)) => Some(inv.link),
+                                _ => None,
+                            };
+                            (cf.about, cf.participants_count.unwrap_or(0), inv)
+                        }
+                        _ => ("".to_string(), 0, None),
+                    };
+                    let date_str = chrono::DateTime::from_timestamp(chan.date as i64, 0)
+                        .map(|d| d.format("%Y-%m-%d").to_string())
+                        .unwrap_or_else(|| "Unknown".to_string());
+                    Ok(TeamFullInfo {
+                        id: team_id,
+                        name: chan.title.clone(),
+                        description: desc,
+                        creation_date: date_str,
+                        member_count: p_count,
+                        invite_link: exported,
+                        is_channel: false,
+                        is_supergroup: chan.megagroup,
+                        can_edit_info: can_edit,
+                    })
+                }
+                tl::enums::Chat::Chat(chat) => {
+                    let full = client
+                        .invoke(&tl::functions::messages::GetFullChat {
+                            chat_id: chat.id,
+                        })
+                        .await
+                        .map_err(|e| format!("Failed to get full chat info: {}", e))?;
+                    let tl::enums::messages::ChatFull::Full(f) = full;
+                    let can_edit = chat.creator || chat.admin_rights.as_ref().map_or(false, |r| { let tl::enums::ChatAdminRights::Rights(a) = r; a.change_info });
+                    let (desc, p_count, exported) = match f.full_chat {
+                        tl::enums::ChatFull::Full(cf) => {
+                            let inv = match cf.exported_invite {
+                                Some(tl::enums::ExportedChatInvite::ChatInviteExported(inv)) => Some(inv.link),
+                                _ => None,
+                            };
+                            let count = match cf.participants {
+                                tl::enums::ChatParticipants::Participants(parts) => parts.participants.len() as i32,
+                                _ => 0,
+                            };
+                            (cf.about, count, inv)
+                        }
+                        _ => ("".to_string(), 0, None),
+                    };
+                    let date_str = chrono::DateTime::from_timestamp(chat.date as i64, 0)
+                        .map(|d| d.format("%Y-%m-%d").to_string())
+                        .unwrap_or_else(|| "Unknown".to_string());
+                    Ok(TeamFullInfo {
+                        id: team_id,
+                        name: chat.title.clone(),
+                        description: desc,
+                        creation_date: date_str,
+                        member_count: p_count,
+                        invite_link: exported,
+                        is_channel: false,
+                        is_supergroup: false,
+                        can_edit_info: can_edit,
+                    })
+                }
+                _ => Err("Unsupported group type".to_string()),
+            }
+        }
+        _ => Err("Invalid peer type".to_string()),
+    }
+}
+
+#[tauri::command]
+pub async fn cmd_get_team_invite_link(
+    team_id: i64,
+    state: State<'_, TelegramState>,
+) -> Result<String, String> {
+    let client_opt = state.client.lock().await.clone();
+    if client_opt.is_none() {
+        return Err("Not connected".to_string());
+    }
+    let client = client_opt.unwrap();
+
+    let peer = resolve_peer(&client, Some(team_id), &state.peer_cache).await?;
+    let input_peer = peer_to_input_peer(&peer)?;
+
+    let exported = client
+        .invoke(&tl::functions::messages::ExportChatInvite {
+            legacy_revoke_permanent: false,
+            request_needed: false,
+            peer: input_peer,
+            expire_date: None,
+            usage_limit: None,
+            title: Some("TgGuild invite".to_string()),
+            subscription_pricing: None,
+        })
+        .await
+        .map_err(|e| format!("Failed to create invite link: {}", e))?;
+
+    match exported {
+        tl::enums::ExportedChatInvite::ChatInviteExported(invite) => Ok(invite.link),
+        tl::enums::ExportedChatInvite::ChatInvitePublicJoinRequests => {
+            Err("This group is set to require join approval. Invite links are not available.".to_string())
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn cmd_leave_team(
+    team_id: i64,
+    state: State<'_, TelegramState>,
+) -> Result<bool, String> {
+    let client_opt = state.client.lock().await.clone();
+    if client_opt.is_none() {
+        return Ok(false);
+    }
+    let client = client_opt.unwrap();
+
+    let me = client.get_me().await.map_err(map_error)?;
+    let peer = resolve_peer(&client, Some(team_id), &state.peer_cache).await?;
+
+    match &peer {
+        Peer::Channel(c) => {
+            let input_channel = tl::enums::InputChannel::Channel(tl::types::InputChannel {
+                channel_id: c.raw.id,
+                access_hash: c.raw.access_hash.ok_or("No access hash")?,
+            });
+
+            client
+                .invoke(&tl::functions::channels::LeaveChannel {
+                    channel: input_channel,
+                })
+                .await
+                .map_err(|e| format!("Failed to leave channel: {}", e))?;
+        }
+        Peer::Group(g) => {
+            client
+                .invoke(&tl::functions::messages::DeleteChatUser {
+                    chat_id: g.raw.id(),
+                    user_id: tl::enums::InputUser::User(tl::types::InputUser {
+                        user_id: me.raw.id(),
+                        access_hash: 0,
+                    }),
+                    revoke_history: false,
+                })
+                .await
+                .map_err(|e| format!("Failed to leave group: {}", e))?;
+        }
+        _ => return Err("Invalid peer type".to_string()),
+    }
+
+    log::info!("Left team {}", team_id);
+    Ok(true)
+}
+
+#[tauri::command]
 pub async fn cmd_send_team_invite_link(
     team_id: i64,
     user_id_str: String,
@@ -1281,10 +1531,8 @@ pub async fn cmd_delete_team(
 }
 
 #[tauri::command]
-pub async fn cmd_edit_team(
-    team_id: i64,
-    new_name: Option<String>,
-    _new_description: Option<String>,
+pub async fn cmd_delete_direct_chat(
+    user_id: i64,
     state: State<'_, TelegramState>,
 ) -> Result<bool, String> {
     let client_opt = state.client.lock().await.clone();
@@ -1293,7 +1541,46 @@ pub async fn cmd_edit_team(
     }
     let client = client_opt.unwrap();
 
-    log::info!("Editing team {} with name {:?}", team_id, new_name);
+    log::info!("Deleting direct chat with user {}", user_id);
+
+    let peer = resolve_peer(&client, Some(user_id), &state.peer_cache).await?;
+    let input_peer = peer_to_input_peer(&peer)?;
+
+    client
+        .invoke(&tl::functions::messages::DeleteHistory {
+            peer: input_peer,
+            max_id: 0,
+            max_date: Some(0),
+            min_date: Some(0),
+            just_clear: false,
+            revoke: false,
+        })
+        .await
+        .map_err(|e| format!("Failed to delete direct chat: {}", e))?;
+
+    log::info!("Deleted direct chat with user {}", user_id);
+    Ok(true)
+}
+
+#[tauri::command]
+pub async fn cmd_edit_team(
+    team_id: i64,
+    new_name: Option<String>,
+    new_description: Option<String>,
+    state: State<'_, TelegramState>,
+) -> Result<bool, String> {
+    let client_opt = state.client.lock().await.clone();
+    if client_opt.is_none() {
+        return Ok(false);
+    }
+    let client = client_opt.unwrap();
+
+    log::info!(
+        "Editing team {} with name {:?} and description {:?}",
+        team_id,
+        new_name,
+        new_description
+    );
 
     let peer = resolve_peer(&client, Some(team_id), &state.peer_cache).await?;
 
@@ -1307,11 +1594,22 @@ pub async fn cmd_edit_team(
             if let Some(name) = new_name {
                 client
                     .invoke(&tl::functions::channels::EditTitle {
-                        channel: input_channel,
+                        channel: input_channel.clone(),
                         title: name,
                     })
                     .await
-                    .map_err(|e| format!("Failed to rename team: {}", e))?;
+                    .map_err(|e| format!("Failed to rename: {}", e))?;
+            }
+
+            if let Some(desc) = new_description {
+                let peer_input = peer_to_input_peer(&peer)?;
+                client
+                    .invoke(&tl::functions::messages::EditChatAbout {
+                        peer: peer_input,
+                        about: desc,
+                    })
+                    .await
+                    .map_err(|e| format!("Failed to update description: {}", e))?;
             }
         }
         Peer::Group(g) => {
@@ -1322,7 +1620,18 @@ pub async fn cmd_edit_team(
                         title: name,
                     })
                     .await
-                    .map_err(|e| format!("Failed to rename team: {}", e))?;
+                    .map_err(|e| format!("Failed to rename: {}", e))?;
+            }
+
+            if let Some(desc) = new_description {
+                let peer_input = peer_to_input_peer(&peer)?;
+                client
+                    .invoke(&tl::functions::messages::EditChatAbout {
+                        peer: peer_input,
+                        about: desc,
+                    })
+                    .await
+                    .map_err(|e| format!("Failed to update description: {}", e))?;
             }
         }
         _ => return Err("Invalid peer type".to_string()),
@@ -1401,7 +1710,7 @@ pub async fn cmd_get_team_messages(
         let media = msg.media();
         let text = msg.text().to_string();
 
-        let (has_media, media_type, media_name, media_size, mime_type, display_text) = match media {
+        let (has_media, media_type, media_name, media_size, mime_type, display_text, audio_duration) = match media {
             Some(grammers_client::types::Media::Photo(_)) => {
                 let display = if !text.is_empty() {
                     text
@@ -1415,6 +1724,7 @@ pub async fn cmd_get_team_messages(
                     0,
                     "image/jpeg".to_string(),
                     display,
+                    None,
                 )
             }
             Some(grammers_client::types::Media::Document(d)) => {
@@ -1427,7 +1737,26 @@ pub async fn cmd_get_team_messages(
                     .map(|s| s.to_lowercase())
                     .unwrap_or_default();
 
-                let file_type = if ["jpg", "jpeg", "png", "gif", "webp", "bmp", "svg"]
+                // Check if document is a Telegram voice message or our own voice recording
+                let is_voice = d.raw.voice
+                    || (name.starts_with("voice-") && ext == "webm");
+
+                // Extract duration from document attributes
+                let duration = match &d.raw.document {
+                    Some(tl::enums::Document::Document(doc)) => {
+                        doc.attributes.iter().find_map(|attr| {
+                            match attr {
+                                tl::enums::DocumentAttribute::Audio(a) => Some(a.duration as f64),
+                                _ => None,
+                            }
+                        })
+                    }
+                    _ => None,
+                };
+
+                let file_type = if is_voice {
+                    "voice"
+                } else if ["jpg", "jpeg", "png", "gif", "webp", "bmp", "svg"]
                     .contains(&ext.as_str())
                 {
                     "image"
@@ -1449,7 +1778,7 @@ pub async fn cmd_get_team_messages(
                 } else {
                     name.to_string()
                 };
-                (true, file_type, name.to_string(), size, mime, display)
+                (true, file_type, name.to_string(), size, mime, display, duration)
             }
             _ => {
                 let display = if !text.is_empty() {
@@ -1464,6 +1793,7 @@ pub async fn cmd_get_team_messages(
                     0,
                     "".to_string(),
                     display,
+                    None,
                 )
             }
         };
@@ -1484,6 +1814,8 @@ pub async fn cmd_get_team_messages(
             mime_type,
             outgoing: msg.outgoing(),
             pinned: msg.pinned(),
+            edited: msg.edit_date().is_some(),
+            audio_duration,
         });
     }
 
@@ -1510,6 +1842,7 @@ pub async fn cmd_get_team_messages(
 pub async fn cmd_send_team_message(
     team_id: Option<i64>,
     message: String,
+    reply_to_message_id: Option<i32>,
     state: State<'_, TelegramState>,
 ) -> Result<bool, String> {
     let client_opt = state.client.lock().await.clone();
@@ -1519,7 +1852,8 @@ pub async fn cmd_send_team_message(
     let client = client_opt.unwrap();
 
     let peer = resolve_peer(&client, team_id, &state.peer_cache).await?;
-    let message_obj = grammers_client::InputMessage::new().text(message);
+    let mut message_obj = grammers_client::InputMessage::new().text(message);
+    message_obj = message_obj.reply_to(reply_to_message_id);
 
     client
         .send_message(&peer, message_obj)
@@ -1566,6 +1900,81 @@ pub async fn cmd_send_team_file(
         .send_message(&peer, message)
         .await
         .map_err(map_error)?;
+
+    Ok(true)
+}
+
+#[tauri::command]
+pub async fn cmd_edit_message(
+    team_id: Option<i64>,
+    message_id: i32,
+    text: String,
+    state: State<'_, TelegramState>,
+) -> Result<bool, String> {
+    let client_opt = state.client.lock().await.clone();
+    if client_opt.is_none() {
+        return Ok(false);
+    }
+    let client = client_opt.unwrap();
+    let peer = resolve_peer(&client, team_id, &state.peer_cache).await?;
+    let input_peer = peer_to_input_peer(&peer)?;
+
+    client
+        .invoke(&tl::functions::messages::EditMessage {
+            no_webpage: true,
+            peer: input_peer,
+            id: message_id,
+            message: Some(text),
+            media: None,
+            reply_markup: None,
+            entities: None,
+            schedule_date: None,
+            invert_media: false,
+            quick_reply_shortcut_id: None,
+            schedule_repeat_period: None,
+        })
+        .await
+        .map_err(|e| format!("Failed to edit message: {}", e))?;
+
+    Ok(true)
+}
+
+#[tauri::command]
+pub async fn cmd_delete_messages(
+    team_id: Option<i64>,
+    message_ids: Vec<i32>,
+    revoke: bool,
+    state: State<'_, TelegramState>,
+) -> Result<bool, String> {
+    let client_opt = state.client.lock().await.clone();
+    if client_opt.is_none() {
+        return Ok(false);
+    }
+    let client = client_opt.unwrap();
+    let peer = resolve_peer(&client, team_id, &state.peer_cache).await?;
+    let input_peer = peer_to_input_peer(&peer)?;
+
+    if revoke {
+        client
+            .invoke(&tl::functions::messages::DeleteMessages {
+                id: message_ids,
+                revoke: true,
+            })
+            .await
+            .map_err(|e| format!("Failed to delete messages: {}", e))?;
+    } else {
+        client
+            .invoke(&tl::functions::messages::DeleteHistory {
+                peer: input_peer,
+                max_id: message_ids.into_iter().max().unwrap_or(0),
+                max_date: Some(0),
+                min_date: Some(0),
+                just_clear: true,
+                revoke: false,
+            })
+            .await
+            .map_err(|e| format!("Failed to delete messages: {}", e))?;
+    }
 
     Ok(true)
 }
@@ -1652,4 +2061,742 @@ pub async fn cmd_pin_team_message(
         .map_err(|e| format!("Failed to pin message: {}", e))?;
 
     Ok(true)
+}
+
+// ========================
+// REACTIONS
+// ========================
+
+#[derive(Clone, serde::Serialize)]
+pub struct ReactionInfo {
+    pub emoji: String,
+    pub count: i32,
+    pub chosen: bool,
+    pub reactors: Vec<String>,
+}
+
+#[derive(Clone, serde::Serialize)]
+pub struct ReactionsResponse {
+    pub reactions: std::collections::HashMap<i32, Vec<ReactionInfo>>,
+}
+
+#[tauri::command]
+pub async fn cmd_send_reaction(
+    team_id: Option<i64>,
+    message_id: i32,
+    emoji: Option<String>,
+    state: State<'_, TelegramState>,
+) -> Result<bool, String> {
+    let client_opt = state.client.lock().await.clone();
+    if client_opt.is_none() {
+        return Err("Not connected".to_string());
+    }
+    let client = client_opt.unwrap();
+
+    let peer = resolve_peer(&client, team_id, &state.peer_cache).await?;
+    let input_peer = resolve_input_peer(&peer)?;
+
+    let reaction = match &emoji {
+        Some(e) => Some(vec![tl::enums::Reaction::Emoji(tl::types::ReactionEmoji {
+            emoticon: e.clone(),
+        })]),
+        None => None,
+    };
+
+    client
+        .invoke(&tl::functions::messages::SendReaction {
+            peer: input_peer,
+            msg_id: message_id,
+            reaction,
+            add_to_recent: true,
+            big: false,
+        })
+        .await
+        .map_err(|e| format!("Failed to send reaction: {}", e))?;
+
+    Ok(true)
+}
+
+#[tauri::command]
+pub async fn cmd_get_message_reactions(
+    team_id: Option<i64>,
+    message_ids: Vec<i32>,
+    state: State<'_, TelegramState>,
+) -> Result<ReactionsResponse, String> {
+    let client_opt = state.client.lock().await.clone();
+    if client_opt.is_none() {
+        return Ok(ReactionsResponse {
+            reactions: std::collections::HashMap::new(),
+        });
+    }
+    let client = client_opt.unwrap();
+
+    let peer = resolve_peer(&client, team_id, &state.peer_cache).await?;
+    let input_peer = resolve_input_peer(&peer)?;
+
+    let result = client
+        .invoke(&tl::functions::messages::GetMessagesReactions {
+            peer: input_peer,
+            id: message_ids.clone(),
+        })
+        .await;
+
+    let mut reactions_map: std::collections::HashMap<i32, Vec<ReactionInfo>> = std::collections::HashMap::new();
+
+    if let Ok(updates) = result {
+        let update_list: Vec<tl::enums::Update> = match &updates {
+            tl::enums::Updates::Updates(u) => u.updates.clone(),
+            tl::enums::Updates::Combined(c) => c.updates.clone(),
+            tl::enums::Updates::UpdateShort(s) => vec![s.update.clone()],
+            _ => Vec::new(),
+        };
+        for update in update_list {
+            if let tl::enums::Update::MessageReactions(react_update) = update {
+                let msg_id = react_update.msg_id;
+                let mut infos: Vec<ReactionInfo> = Vec::new();
+                let tl::enums::MessageReactions::Reactions(reactions_struct) = &react_update.reactions;
+                for rc_enum in &reactions_struct.results {
+                    let tl::enums::ReactionCount::Count(rc) = rc_enum;
+                    let emoji = match &rc.reaction {
+                        tl::enums::Reaction::Emoji(e) => e.emoticon.clone(),
+                        _ => continue,
+                    };
+                    infos.push(ReactionInfo {
+                        emoji,
+                        count: rc.count,
+                        chosen: rc.chosen_order.is_some(),
+                        reactors: Vec::new(),
+                    });
+                }
+                reactions_map.insert(msg_id, infos);
+            }
+        }
+    } else {
+        log::warn!("GetMessagesReactions failed or returned no data");
+    }
+
+    Ok(ReactionsResponse {
+        reactions: reactions_map,
+    })
+}
+
+// ========================
+// READ RECEIPTS
+// ========================
+
+#[derive(Clone, serde::Serialize)]
+pub struct ReadReceipt {
+    pub user_id: i64,
+    pub user_name: String,
+    pub read_at: String,
+}
+
+#[derive(Clone, serde::Serialize)]
+pub struct MessageReadStatus {
+    pub is_read: bool,
+    pub read_count: i32,
+    pub total_count: i32,
+    pub readers: Vec<ReadReceipt>,
+}
+
+#[tauri::command]
+pub async fn cmd_mark_read(
+    team_id: Option<i64>,
+    max_message_id: i32,
+    state: State<'_, TelegramState>,
+) -> Result<bool, String> {
+    let client_opt = state.client.lock().await.clone();
+    if client_opt.is_none() {
+        return Err("Not connected".to_string());
+    }
+    let client = client_opt.unwrap();
+
+    let peer = resolve_peer(&client, team_id, &state.peer_cache).await?;
+    let input_peer = resolve_input_peer(&peer)?;
+
+    match &peer {
+        Peer::Channel(_) => {
+            let input_channel = match &input_peer {
+                tl::enums::InputPeer::Channel(ch) => {
+                    tl::enums::InputChannel::Channel(tl::types::InputChannel {
+                        channel_id: ch.channel_id,
+                        access_hash: ch.access_hash,
+                    })
+                }
+                _ => return Err("Expected channel peer".to_string()),
+            };
+            client
+                .invoke(&tl::functions::channels::ReadHistory {
+                    channel: input_channel,
+                    max_id: max_message_id,
+                })
+                .await
+                .map_err(|e| format!("Failed to mark read: {}", e))?;
+        }
+        _ => {
+            client
+                .invoke(&tl::functions::messages::ReadHistory {
+                    peer: input_peer,
+                    max_id: max_message_id,
+                })
+                .await
+                .map_err(|e| format!("Failed to mark read: {}", e))?;
+        }
+    }
+
+    Ok(true)
+}
+
+#[tauri::command]
+pub async fn cmd_get_message_read_status(
+    team_id: Option<i64>,
+    message_id: i32,
+    state: State<'_, TelegramState>,
+) -> Result<MessageReadStatus, String> {
+    let client_opt = state.client.lock().await.clone();
+    if client_opt.is_none() {
+        return Err("Not connected".to_string());
+    }
+    let client = client_opt.unwrap();
+
+    let peer = resolve_peer(&client, team_id, &state.peer_cache).await?;
+    let input_peer = resolve_input_peer(&peer)?;
+
+    let result = client
+        .invoke(&tl::functions::messages::GetMessagesViews {
+            peer: input_peer,
+            id: vec![message_id],
+            increment: false,
+        })
+        .await
+        .map_err(|e| format!("Failed to get message views: {}", e))?;
+
+    let tl::enums::messages::MessageViews::Views(views_response) = result;
+    if let Some(view_enum) = views_response.views.first() {
+        let tl::enums::MessageViews::Views(view) = view_enum;
+        let read_count = view.views.unwrap_or(0).max(0) as i32;
+        Ok(MessageReadStatus {
+            is_read: read_count > 0,
+            read_count,
+            total_count: 0,
+            readers: Vec::new(),
+        })
+    } else {
+        Ok(MessageReadStatus {
+            is_read: false,
+            read_count: 0,
+            total_count: 0,
+            readers: Vec::new(),
+        })
+    }
+}
+
+// ========================
+// TYPING INDICATORS
+// ========================
+
+#[derive(Clone, serde::Serialize)]
+pub struct TypingUser {
+    pub user_id: i64,
+    pub user_name: String,
+    pub action: String,
+}
+
+#[tauri::command]
+pub async fn cmd_set_typing(
+    team_id: Option<i64>,
+    typing: bool,
+    state: State<'_, TelegramState>,
+) -> Result<bool, String> {
+    let client_opt = state.client.lock().await.clone();
+    if client_opt.is_none() {
+        return Err("Not connected".to_string());
+    }
+    let client = client_opt.unwrap();
+
+    let peer = resolve_peer(&client, team_id, &state.peer_cache).await?;
+    let input_peer = resolve_input_peer(&peer)?;
+
+    let action = if typing {
+        tl::enums::SendMessageAction::SendMessageTypingAction
+    } else {
+        tl::enums::SendMessageAction::SendMessageCancelAction
+    };
+
+    client
+        .invoke(&tl::functions::messages::SetTyping {
+            peer: input_peer,
+            action,
+            top_msg_id: None,
+        })
+        .await
+        .map_err(|e| format!("Failed to set typing: {}", e))?;
+
+    Ok(true)
+}
+
+#[tauri::command]
+pub async fn cmd_get_typing_status(
+    team_id: Option<i64>,
+    state: State<'_, TelegramState>,
+) -> Result<Vec<TypingUser>, String> {
+    let typing_store = state.typing_store.lock().await;
+    let peer_key = format!("peer:{}", team_id.unwrap_or(0));
+    let now = Utc::now().timestamp();
+
+    let mut result = Vec::new();
+    if let Some(users) = typing_store.get(&peer_key) {
+        for (_user_id_str, typing_info) in users {
+            if now - typing_info.last_updated < 7 {
+                result.push(TypingUser {
+                    user_id: typing_info.user_id,
+                    user_name: typing_info.user_name.clone(),
+                    action: typing_info.action.clone(),
+                });
+            }
+        }
+    }
+
+    Ok(result)
+}
+
+#[tauri::command]
+pub async fn cmd_record_typing(
+    team_id: Option<i64>,
+    user_id: i64,
+    user_name: String,
+    action: String,
+    state: State<'_, TelegramState>,
+) -> Result<bool, String> {
+    let mut typing_store = state.typing_store.lock().await;
+    let peer_key = format!("peer:{}", team_id.unwrap_or(0));
+    let entry = typing_store.entry(peer_key).or_insert_with(std::collections::HashMap::new);
+    entry.insert(
+        user_id.to_string(),
+        crate::commands::TypingEntry {
+            user_id,
+            user_name,
+            action,
+            last_updated: Utc::now().timestamp(),
+        },
+    );
+    Ok(true)
+}
+
+// ========================
+// ONLINE PRESENCE
+// ========================
+
+#[derive(Clone, serde::Serialize)]
+pub struct UserPresence {
+    pub user_id: i64,
+    pub online: bool,
+    pub last_seen: Option<String>,
+}
+
+#[tauri::command]
+pub async fn cmd_update_presence(
+    online: bool,
+    state: State<'_, TelegramState>,
+) -> Result<bool, String> {
+    let client_opt = state.client.lock().await.clone();
+    if client_opt.is_none() {
+        return Err("Not connected".to_string());
+    }
+    let client = client_opt.unwrap();
+
+    client
+        .invoke(&tl::functions::account::UpdateStatus {
+            offline: !online,
+        })
+        .await
+        .map_err(|e| format!("Failed to update presence: {}", e))?;
+
+    Ok(true)
+}
+
+#[tauri::command]
+pub async fn cmd_get_user_presence(
+    user_ids: Vec<i64>,
+    state: State<'_, TelegramState>,
+) -> Result<Vec<UserPresence>, String> {
+    let client_opt = state.client.lock().await.clone();
+    if client_opt.is_none() {
+        return Ok(Vec::new());
+    }
+    let client = client_opt.unwrap();
+
+    let mut results = Vec::new();
+
+    for user_id in user_ids {
+        let cached_peer = {
+            let cache = state.peer_cache.read().await;
+            cache.get(&user_id).cloned()
+        };
+
+        let input_user = if let Some(peer) = cached_peer {
+            match &peer {
+                Peer::User(u) => {
+                    let access_hash = match &u.raw {
+                        tl::enums::User::User(raw) => raw.access_hash.unwrap_or(0),
+                        _ => 0,
+                    };
+                    tl::enums::InputUser::User(tl::types::InputUser {
+                        user_id,
+                        access_hash,
+                    })
+                }
+                _ => continue,
+            }
+        } else {
+            continue;
+        };
+
+        let user_result = client
+            .invoke(&tl::functions::users::GetUsers {
+                id: vec![input_user],
+            })
+            .await;
+
+        match user_result {
+            Ok(users) => {
+                for user in users {
+                    if let tl::enums::User::User(u) = user {
+                        let status = u.status;
+                        let (online, last_seen) = match status {
+                            Some(tl::enums::UserStatus::Online(_)) => (true, None),
+                            Some(tl::enums::UserStatus::Offline(off)) => {
+                                let was = chrono::DateTime::from_timestamp(off.was_online as i64, 0)
+                                    .map(|d| d.format("%Y-%m-%d %H:%M:%S").to_string())
+                                    .unwrap_or_else(|| "recently".to_string());
+                                (false, Some(was))
+                            }
+                            Some(tl::enums::UserStatus::Recently(_)) => (false, Some("recently".to_string())),
+                            Some(tl::enums::UserStatus::LastWeek(_)) => (false, Some("last week".to_string())),
+                            Some(tl::enums::UserStatus::LastMonth(_)) => (false, Some("last month".to_string())),
+                            _ => (false, Some("recently".to_string())),
+                        };
+                        results.push(UserPresence {
+                            user_id,
+                            online,
+                            last_seen,
+                        });
+                    }
+                }
+            }
+            Err(e) => {
+                log::warn!("Failed to get user presence for {}: {}", user_id, e);
+            }
+        }
+    }
+
+    Ok(results)
+}
+
+// ========================
+// ADVANCED MESSAGE MANAGEMENT
+// ========================
+
+#[derive(Clone, serde::Serialize)]
+pub struct ForwardTarget {
+    pub id: i64,
+    pub name: String,
+    pub photo_url: Option<String>,
+    pub is_channel: bool,
+    pub is_supergroup: bool,
+}
+
+#[derive(Clone, serde::Serialize)]
+pub struct PinnedMessageInfo {
+    pub message_id: i32,
+    pub text: String,
+    pub sender_name: String,
+    pub date: String,
+}
+
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub struct StarredMessage {
+    pub chat_id: i64,
+    pub message_id: i32,
+    pub chat_name: String,
+    pub text_preview: String,
+    pub sender_name: String,
+    pub date: String,
+    pub starred_at: String,
+}
+
+#[tauri::command]
+pub async fn cmd_unpin_team_message(
+    team_id: Option<i64>,
+    message_id: i32,
+    state: State<'_, TelegramState>,
+) -> Result<bool, String> {
+    let client_opt = state.client.lock().await.clone();
+    if client_opt.is_none() {
+        return Ok(false);
+    }
+    let client = client_opt.unwrap();
+    let peer = resolve_peer(&client, team_id, &state.peer_cache).await?;
+    let input_peer = resolve_input_peer(&peer)?;
+
+    client
+        .invoke(&tl::functions::messages::UpdatePinnedMessage {
+            silent: false,
+            unpin: true,
+            pm_oneside: false,
+            peer: input_peer,
+            id: message_id,
+        })
+        .await
+        .map_err(|e| format!("Failed to unpin message: {}", e))?;
+
+    Ok(true)
+}
+
+#[tauri::command]
+pub async fn cmd_get_pinned_messages(
+    team_id: Option<i64>,
+    state: State<'_, TelegramState>,
+) -> Result<Vec<PinnedMessageInfo>, String> {
+    let client_opt = state.client.lock().await.clone();
+    if client_opt.is_none() {
+        return Ok(Vec::new());
+    }
+    let client = client_opt.unwrap();
+    let peer = resolve_peer(&client, team_id, &state.peer_cache).await?;
+    let input_peer = resolve_input_peer(&peer)?;
+
+    let result = client
+        .invoke(&tl::functions::messages::Search {
+            peer: input_peer,
+            q: String::new(),
+            from_id: None,
+            saved_peer_id: None,
+            saved_reaction: None,
+            top_msg_id: None,
+            filter: tl::enums::MessagesFilter::InputMessagesFilterPinned,
+            min_date: 0,
+            max_date: 0,
+            offset_id: 0,
+            add_offset: 0,
+            limit: 50,
+            max_id: 0,
+            min_id: 0,
+            hash: 0,
+        })
+        .await
+        .map_err(|e| format!("Failed to get pinned messages: {}", e))?;
+
+    let messages_vec = match result {
+        tl::enums::messages::Messages::Messages(m) => m.messages,
+        tl::enums::messages::Messages::Slice(s) => s.messages,
+        tl::enums::messages::Messages::ChannelMessages(c) => c.messages,
+        _ => Vec::new(),
+    };
+
+    let mut pinned = Vec::new();
+    for msg_enum in messages_vec {
+        if let tl::enums::Message::Message(msg) = msg_enum {
+            let sender_name = if let Some(ref from_id) = msg.from_id {
+                match from_id {
+                    tl::enums::Peer::User(u) => format!("User({})", u.user_id),
+                    _ => "Unknown".to_string(),
+                }
+            } else {
+                "Unknown".to_string()
+            };
+            pinned.push(PinnedMessageInfo {
+                message_id: msg.id,
+                text: msg.message.clone(),
+                sender_name,
+                date: chrono::DateTime::from_timestamp(msg.date as i64, 0)
+                    .map(|d| d.format("%Y-%m-%d %H:%M:%S").to_string())
+                    .unwrap_or_default(),
+            });
+        }
+    }
+
+    Ok(pinned)
+}
+
+#[tauri::command]
+pub async fn cmd_get_forward_targets(
+    state: State<'_, TelegramState>,
+) -> Result<Vec<ForwardTarget>, String> {
+    let client_opt = state.client.lock().await.clone();
+    if client_opt.is_none() {
+        return Ok(Vec::new());
+    }
+    let client = client_opt.unwrap();
+
+    let mut dialogs = client.iter_dialogs();
+    let mut targets = Vec::new();
+    while let Some(dialog) = dialogs.next().await.map_err(map_error)? {
+        let peer = &dialog.peer;
+        let (id, name, is_channel, is_supergroup) = match peer {
+            Peer::User(u) => (u.raw.id(), u.full_name(), false, false),
+            Peer::Group(g) => {
+                let name = match &g.raw {
+                    tl::enums::Chat::Chat(c) => c.title.clone(),
+                    tl::enums::Chat::Forbidden(f) => f.title.clone(),
+                    _ => "Unknown".to_string(),
+                };
+                (g.raw.id(), name, false, false)
+            }
+            Peer::Channel(c) => {
+                let is_ch = c.raw.broadcast;
+                (c.raw.id, c.raw.title.clone(), is_ch, !is_ch)
+            }
+        };
+        targets.push(ForwardTarget {
+            id,
+            name,
+            photo_url: None,
+            is_channel,
+            is_supergroup,
+        });
+    }
+
+    Ok(targets)
+}
+
+#[tauri::command]
+pub async fn cmd_forward_messages(
+    from_team_id: Option<i64>,
+    message_ids: Vec<i32>,
+    to_team_id: i64,
+    state: State<'_, TelegramState>,
+) -> Result<bool, String> {
+    let client_opt = state.client.lock().await.clone();
+    if client_opt.is_none() {
+        return Ok(false);
+    }
+    let client = client_opt.unwrap();
+
+    let from_peer = resolve_peer(&client, from_team_id, &state.peer_cache).await?;
+    let from_input_peer = resolve_input_peer(&from_peer)?;
+    let to_peer = resolve_peer(&client, Some(to_team_id), &state.peer_cache).await?;
+    let to_input_peer = resolve_input_peer(&to_peer)?;
+
+    let random_ids: Vec<i64> = message_ids.iter().map(|_| rand::random::<i64>()).collect();
+
+    client
+        .invoke(&tl::functions::messages::ForwardMessages {
+            silent: false,
+            background: false,
+            with_my_score: false,
+            drop_author: false,
+            drop_media_captions: false,
+            noforwards: false,
+            allow_paid_floodskip: false,
+            from_peer: from_input_peer,
+            id: message_ids,
+            random_id: random_ids,
+            to_peer: to_input_peer,
+            top_msg_id: None,
+            reply_to: None,
+            schedule_date: None,
+            schedule_repeat_period: None,
+            send_as: None,
+            quick_reply_shortcut: None,
+            video_timestamp: None,
+            allow_paid_stars: None,
+            suggested_post: None,
+        })
+        .await
+        .map_err(|e| format!("Failed to forward messages: {}", e))?;
+
+    Ok(true)
+}
+
+fn star_file_path(app_handle: &tauri::AppHandle) -> std::path::PathBuf {
+    let mut path = app_handle
+        .path()
+        .app_data_dir()
+        .unwrap_or_else(|_| std::path::PathBuf::from("."));
+    path.push("starred_messages.json");
+    path
+}
+
+fn load_starred(path: &std::path::Path) -> Vec<StarredMessage> {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|data| serde_json::from_str(&data).ok())
+        .unwrap_or_default()
+}
+
+fn save_starred(path: &std::path::Path, starred: &[StarredMessage]) {
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Ok(data) = serde_json::to_string_pretty(starred) {
+        let _ = std::fs::write(path, data);
+    }
+}
+
+#[tauri::command]
+pub async fn cmd_star_message(
+    chat_id: i64,
+    message_id: i32,
+    chat_name: String,
+    text_preview: String,
+    sender_name: String,
+    date: String,
+    app_handle: tauri::AppHandle,
+) -> Result<bool, String> {
+    let path = star_file_path(&app_handle);
+    let mut starred = load_starred(&path);
+
+    if !starred
+        .iter()
+        .any(|s| s.chat_id == chat_id && s.message_id == message_id)
+    {
+        starred.push(StarredMessage {
+            chat_id,
+            message_id,
+            chat_name,
+            text_preview,
+            sender_name,
+            date,
+            starred_at: chrono::Utc::now()
+                .format("%Y-%m-%d %H:%M:%S")
+                .to_string(),
+        });
+        save_starred(&path, &starred);
+    }
+    Ok(true)
+}
+
+#[tauri::command]
+pub async fn cmd_unstar_message(
+    chat_id: i64,
+    message_id: i32,
+    app_handle: tauri::AppHandle,
+) -> Result<bool, String> {
+    let path = star_file_path(&app_handle);
+    let mut starred = load_starred(&path);
+    starred.retain(|s| !(s.chat_id == chat_id && s.message_id == message_id));
+    save_starred(&path, &starred);
+    Ok(true)
+}
+
+#[tauri::command]
+pub async fn cmd_get_starred_messages(
+    app_handle: tauri::AppHandle,
+) -> Result<Vec<StarredMessage>, String> {
+    let path = star_file_path(&app_handle);
+    Ok(load_starred(&path))
+}
+
+#[tauri::command]
+pub async fn cmd_is_message_starred(
+    chat_id: i64,
+    message_id: i32,
+    app_handle: tauri::AppHandle,
+) -> Result<bool, String> {
+    let path = star_file_path(&app_handle);
+    let starred = load_starred(&path);
+    Ok(starred
+        .iter()
+        .any(|s| s.chat_id == chat_id && s.message_id == message_id))
 }

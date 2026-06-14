@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
 import { load } from "@tauri-apps/plugin-store";
@@ -9,7 +9,7 @@ import { WindowControls } from "./components/WindowControls";
 import { motion, AnimatePresence } from "framer-motion";
 import "./App.css";
 
-import { Toaster } from "sonner";
+import { Toaster, toast } from "sonner";
 import { ConfirmProvider } from "./context/ConfirmContext";
 import { ThemeProvider, useTheme } from "./context/ThemeContext";
 import { DropZoneProvider } from "./contexts/DropZoneContext";
@@ -63,6 +63,26 @@ function AppContent() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [isCheckingAuth, setIsCheckingAuth] = useState(true);
   const { theme } = useTheme();
+  const oauthHandled = useRef(false);
+
+  useEffect(() => {
+    if (oauthHandled.current) return;
+    const params = new URLSearchParams(window.location.search);
+    const code = params.get("code");
+    if (code) {
+      oauthHandled.current = true;
+      (async () => {
+        try {
+          await invoke("cmd_google_exchange_code", { code });
+          toast.success("Google account connected!");
+          const clean = window.location.origin + window.location.pathname;
+          window.history.replaceState({}, "", clean);
+        } catch (e) {
+          toast.error("Failed to connect Google: " + e);
+        }
+      })();
+    }
+  }, []);
 
   useEffect(() => {
     const checkAuth = async () => {

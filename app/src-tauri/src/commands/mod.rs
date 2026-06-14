@@ -4,6 +4,14 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
+#[derive(Clone, serde::Serialize)]
+pub struct TypingEntry {
+    pub user_id: i64,
+    pub user_name: String,
+    pub action: String,
+    pub last_updated: i64,
+}
+
 /// Tracks the lifecycle of the Telegram connection
 ///
 /// IMPORTANT: The `runner_shutdown` field is critical for preventing stack overflow.
@@ -28,10 +36,14 @@ pub struct TelegramState {
     /// Set of transfer IDs that have been cancelled. Checked cooperatively
     /// in upload/download chunk loops. Cleared on logout.
     pub cancelled_transfers: Arc<tokio::sync::RwLock<HashSet<String>>>,
+    /// In-memory store for typing indicators keyed by peer_key -> user_id -> TypingEntry.
+    /// Used for cross-client typing indicator sharing.
+    pub typing_store: Arc<tokio::sync::Mutex<HashMap<String, HashMap<String, TypingEntry>>>>,
 }
 
 pub mod auth;
 pub mod fs;
+pub mod google;
 pub mod network;
 pub mod preview;
 pub mod streaming;
@@ -40,6 +52,7 @@ pub mod utils;
 
 pub use auth::*;
 pub use fs::*;
+pub use google::*;
 pub use network::*;
 pub use preview::*;
 pub use streaming::*;

@@ -1,7 +1,8 @@
-import { useState, useEffect, useRef, useMemo } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { tempDir, join } from '@tauri-apps/api/path';
 import { invoke } from '@tauri-apps/api/core';
 import { open, save } from '@tauri-apps/plugin-dialog';
+import { open as shellOpen } from '@tauri-apps/plugin-shell';
 import { writeFile } from '@tauri-apps/plugin-fs';
 import {
     AtSign,
@@ -25,11 +26,32 @@ import {
     Video,
     ChevronDown,
     ChevronUp,
+    ArrowUp,
+    ArrowDown,
+    Check,
+    CheckCheck,
+    Users,
+    Info,
+    Link2,
+    LogOut,
+    Trash2,
+    Share2,
+    Star,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { TelegramAvatar } from './TelegramAvatar';
 import { MemberStack } from './MemberStack';
+import { VoiceMessage } from './VoiceMessage';
 import { readTelegramMessageCache, saveTelegramMessageCache } from './telegramCache';
+import { GroupInfoModal } from './GroupInfoModal';
+import { MemberListModal } from './MemberListModal';
+import { SharedMediaModal } from './SharedMediaModal';
+import { MessageActions } from './MessageActions';
+import { PinnedMessagesBar } from './PinnedMessagesBar';
+import { ForwardPickerModal } from './ForwardPickerModal';
+import { StarredMessages } from './StarredMessages';
+import { SelectionBar, SelectionDeleteConfirm } from './SelectionBar';
+import { useRealtime } from '../../hooks/useRealtime';
 
 interface ChatMessage {
     id: number;
@@ -46,6 +68,8 @@ interface ChatMessage {
     outgoing?: boolean;
     pinned?: boolean;
     pending?: boolean;
+    edited?: boolean;
+    audio_duration?: number | null;
 }
 
 interface MessagesResponse {
@@ -72,8 +96,18 @@ interface StreamInfo {
     base_url: string;
 }
 
+interface PinnedMessageInfo {
+    message_id: number;
+    text: string;
+    sender_name: string;
+    date: string;
+}
+
+
+
 const MESSAGES_PAGE_SIZE = 50;
 const SCROLLBACK_THRESHOLD = 120;
+const PRESENCE_POLL_INTERVAL = 30000;
 
 interface TeamChatProps {
     groupId: number | null;
@@ -113,12 +147,58 @@ export function TeamChat({
     const [showEmojiPicker, setShowEmojiPicker] = useState(false);
     const [attachmentDraft, setAttachmentDraft] = useState<AttachmentDraft | null>(null);
     const [reactionPickerFor, setReactionPickerFor] = useState<number | null>(null);
-    const [reactions, setReactions] = useState<Record<string, string[]>>({});
     const [downloadingId, setDownloadingId] = useState<number | null>(null);
     const [streamToken, setStreamToken] = useState('');
     const [streamBaseUrl, setStreamBaseUrl] = useState('http://localhost:14201');
     const [showPlusMenu, setShowPlusMenu] = useState(false);
     const [membersExpanded, setMembersExpanded] = useState(false);
+    const [searchOpen, setSearchOpen] = useState(false);
+    const [searchQuery, setSearchQuery] = useState('');
+    const [searchResultIds, setSearchResultIds] = useState<number[]>([]);
+    const [searchCurrentIdx, setSearchCurrentIdx] = useState(0);
+    const searchInputRef = useRef<HTMLInputElement>(null);
+    const searchTimerRef = useRef<ReturnType<typeof setTimeout>>(null);
+
+    const [replyTo, setReplyTo] = useState<ChatMessage | null>(null);
+    const [editingMessage, setEditingMessage] = useState<ChatMessage | null>(null);
+    const [editText, setEditText] = useState('');
+    const [showDeleteConfirm, setShowDeleteConfirm] = useState<ChatMessage | null>(null);
+    const [deleteForEveryone, setDeleteForEveryone] = useState(false);
+    const [showMessageInfo, setShowMessageInfo] = useState<ChatMessage | null>(null);
+
+    const [showThreeDotMenu, setShowThreeDotMenu] = useState(false);
+    const [showMemberListModal, setShowMemberListModal] = useState(false);
+    const [showGroupInfoModal, setShowGroupInfoModal] = useState(false);
+    const [showSharedMediaModal, setShowSharedMediaModal] = useState(false);
+    const [sharedMediaTab, setSharedMediaTab] = useState<'all' | 'media'>('all');
+    const [showClearConfirm, setShowClearConfirm] = useState(false);
+    const [clearedUpTo, setClearedUpTo] = useState<Record<string, number>>(() => {
+        try {
+            const raw = window.localStorage.getItem('tgguild.clearedChats.v1');
+            return raw ? JSON.parse(raw) : {};
+        } catch { return {}; }
+    });
+    const menuRef = useRef<HTMLDivElement>(null);
+
+    const [pinnedMessages, setPinnedMessages] = useState<PinnedMessageInfo[]>([]);
+    const [showForwardModal, setShowForwardModal] = useState(false);
+    const [showStarredView, setShowStarredView] = useState(false);
+    const [selectedMessageIds, setSelectedMessageIds] = useState<Set<number>>(new Set());
+    const [showSelectionDelete, setShowSelectionDelete] = useState(false);
+    const [starStatus, setStarStatus] = useState<Record<string, boolean>>({});
+
+    const realtime = useRealtime(groupId, isDirect);
+
+    useEffect(() => {
+        if (!showThreeDotMenu) return;
+        const handler = (e: MouseEvent) => {
+            if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+                setShowThreeDotMenu(false);
+            }
+        };
+        window.addEventListener('mousedown', handler);
+        return () => window.removeEventListener('mousedown', handler);
+    }, [showThreeDotMenu]);
 
     const recorderRef = useRef<MediaRecorder | null>(null);
     const recordingChunksRef = useRef<BlobPart[]>([]);
@@ -151,6 +231,11 @@ export function TeamChat({
     };
     const peerKeyRef = useRef('');
     const peerKey = groupId === null ? 'saved' : String(groupId);
+    const displayMessages = useMemo(() => {
+        const upTo = clearedUpTo[peerKey];
+        if (!upTo) return messages;
+        return messages.filter(msg => msg.id > upTo);
+    }, [messages, clearedUpTo, peerKey]);
 
     useEffect(() => {
         peerKeyRef.current = peerKey;
@@ -173,15 +258,6 @@ export function TeamChat({
     }, [groupId]);
 
     useEffect(() => {
-        try {
-            const raw = window.localStorage.getItem(`tgguild.reactions.${groupId ?? 'self'}`);
-            setReactions(raw ? JSON.parse(raw) : {});
-        } catch {
-            setReactions({});
-        }
-    }, [groupId]);
-
-    useEffect(() => {
         invoke<StreamInfo>('cmd_get_stream_info')
             .then((info) => {
                 setStreamToken(info.token);
@@ -189,6 +265,15 @@ export function TeamChat({
             })
             .catch(console.error);
     }, []);
+
+    // Fetch presence for direct chat partner
+    useEffect(() => {
+        if (isDirect && groupId && groupId > 0) {
+            realtime.fetchPresence([groupId]);
+            const timer = setInterval(() => realtime.fetchPresence([groupId]), PRESENCE_POLL_INTERVAL || 30000);
+            return () => clearInterval(timer);
+        }
+    }, [isDirect, groupId, realtime]);
 
     useEffect(() => {
         if (!recording || !recordingStartedAt) return;
@@ -199,9 +284,73 @@ export function TeamChat({
     }, [recording, recordingStartedAt]);
 
     useEffect(() => {
-        if (messages.length === 0) return;
-        saveTelegramMessageCache(peerKey, messages, beforeMessageId, hasOlderMessages);
-    }, [messages, beforeMessageId, hasOlderMessages, peerKey]);
+        if (displayMessages.length === 0) return;
+        saveTelegramMessageCache(peerKey, displayMessages, beforeMessageId, hasOlderMessages);
+    }, [displayMessages, beforeMessageId, hasOlderMessages, peerKey]);
+
+    // Mark messages as read when they are visible
+    useEffect(() => {
+        if (displayMessages.length === 0) return;
+        const maxId = displayMessages
+            .filter(msg => !msg.outgoing && !msg.pending)
+            .reduce((max, msg) => Math.max(max, msg.id), 0);
+        if (maxId > 0) {
+            realtime.markAsRead(maxId);
+        }
+    }, [displayMessages, realtime]);
+
+    // Fetch read receipts for outgoing messages periodically
+    useEffect(() => {
+        if (!groupId || displayMessages.length === 0) return;
+        const outgoingIds = displayMessages
+            .filter(msg => msg.outgoing && !msg.pending)
+            .map(msg => msg.id)
+            .filter(id => id > 0);
+        if (outgoingIds.length === 0) return;
+
+        const fetchReads = async () => {
+            for (const id of outgoingIds) {
+                realtime.fetchReadStatus(id);
+            }
+        };
+        fetchReads();
+        const timer = setInterval(fetchReads, 15000);
+        return () => clearInterval(timer);
+    }, [groupId, displayMessages, realtime]);
+
+    useEffect(() => {
+        if (searchOpen) {
+            requestAnimationFrame(() => searchInputRef.current?.focus());
+        }
+    }, [searchOpen]);
+
+    // Load pinned messages
+    useEffect(() => {
+        if (!groupId) return;
+        invoke<PinnedMessageInfo[]>('cmd_get_pinned_messages', { teamId: groupId })
+            .then((result) => setPinnedMessages(result))
+            .catch(() => {});
+    }, [groupId, displayMessages.length]);
+
+    // Check star status for messages
+    useEffect(() => {
+        if (!groupId || displayMessages.length === 0) return;
+        const checkStarStatus = async () => {
+            const statuses: Record<string, boolean> = {};
+            const batch = displayMessages.filter(m => !m.pending).slice(-30);
+            for (const msg of batch) {
+                try {
+                    const starred = await invoke<boolean>('cmd_is_message_starred', {
+                        chatId: groupId,
+                        messageId: msg.id,
+                    });
+                    statuses[msg.id] = starred;
+                } catch {}
+            }
+            setStarStatus(prev => ({ ...prev, ...statuses }));
+        };
+        checkStarStatus();
+    }, [groupId, displayMessages.length]);
 
     const isNearBottom = () => {
         const container = messagesContainerRef.current;
@@ -311,10 +460,20 @@ export function TeamChat({
                     caption: newMessage.trim() || null,
                 });
                 setAttachmentDraft(null);
+            } else if (editingMessage) {
+                await handleSendEdit();
+                return;
             } else {
-                await invoke('cmd_send_team_message', { teamId: groupId, message: newMessage });
+                await invoke('cmd_send_team_message', {
+                    teamId: groupId,
+                    message: newMessage,
+                    replyToMessageId: replyTo?.id ?? null,
+                });
             }
             setNewMessage('');
+            setReplyTo(null);
+            setEditingMessage(null);
+            setEditText('');
             loadMessages({ silent: true, forceScroll: true });
         } catch (e) {
             toast.error(`Failed to send: ${e}`);
@@ -361,13 +520,130 @@ export function TeamChat({
     };
 
     const handlePin = async (messageId: number) => {
+        const alreadyPinned = pinnedMessages.some(p => p.message_id === messageId);
         try {
-            await invoke('cmd_pin_team_message', { teamId: groupId, messageId });
-            toast.success('Message pinned');
+            if (alreadyPinned) {
+                await invoke('cmd_unpin_team_message', { teamId: groupId, messageId });
+                toast.success('Message unpinned');
+            } else {
+                await invoke('cmd_pin_team_message', { teamId: groupId, messageId });
+                toast.success('Message pinned');
+            }
+            loadMessages({ silent: true });
+            const result = await invoke<PinnedMessageInfo[]>('cmd_get_pinned_messages', { teamId: groupId });
+            setPinnedMessages(result);
+        } catch (e) {
+            toast.error(`Failed to ${alreadyPinned ? 'unpin' : 'pin'} message: ${e}`);
+        }
+    };
+
+    const handleUnpin = async (messageId: number) => {
+        try {
+            await invoke('cmd_unpin_team_message', { teamId: groupId, messageId });
+            toast.success('Message unpinned');
+            const result = await invoke<PinnedMessageInfo[]>('cmd_get_pinned_messages', { teamId: groupId });
+            setPinnedMessages(result);
+        } catch (e) {
+            toast.error(`Failed to unpin: ${e}`);
+        }
+    };
+
+    const handleStarToggle = async (messageId: number) => {
+        const key = `${groupId}-${messageId}`;
+        const currentlyStarred = starStatus[key] || false;
+        try {
+            if (currentlyStarred) {
+                await invoke('cmd_unstar_message', { chatId: groupId, messageId });
+            } else {
+                await invoke('cmd_star_message', { chatId: groupId, messageId });
+            }
+            setStarStatus(prev => ({ ...prev, [key]: !currentlyStarred }));
+            toast.success(currentlyStarred ? 'Removed star' : 'Message starred');
+        } catch (e) {
+            toast.error(`Failed to ${currentlyStarred ? 'unstar' : 'star'} message: ${e}`);
+        }
+    };
+
+    const handleForward = async (targetIds: number[], sendCopy: boolean) => {
+        if (!groupId || selectedMessageIds.size === 0) return;
+        try {
+            await invoke('cmd_forward_messages', {
+                fromChatId: groupId,
+                messageIds: Array.from(selectedMessageIds),
+                toChatIds: targetIds,
+                sendCopy,
+            });
+            toast.success(`Forwarded ${selectedMessageIds.size} message${selectedMessageIds.size > 1 ? 's' : ''} to ${targetIds.length} chat${targetIds.length > 1 ? 's' : ''}`);
+            setShowForwardModal(false);
+            setSelectedMessageIds(new Set());
+        } catch (e) {
+            toast.error(`Failed to forward: ${e}`);
+        }
+    };
+
+    const handleForwardSingle = async (messageId: number) => {
+        setSelectedMessageIds(new Set([messageId]));
+        setShowForwardModal(true);
+    };
+
+    const handleToggleSelect = (messageId: number) => {
+        setSelectedMessageIds(prev => {
+            const next = new Set(prev);
+            if (next.has(messageId)) next.delete(messageId);
+            else next.add(messageId);
+            return next;
+        });
+    };
+
+    const handleCancelSelection = () => {
+        setSelectedMessageIds(new Set());
+    };
+
+    const handleSelectionDelete = async (revoke: boolean) => {
+        if (selectedMessageIds.size === 0) return;
+        try {
+            await invoke('cmd_delete_messages', {
+                teamId: groupId,
+                messageIds: Array.from(selectedMessageIds),
+                revoke,
+            });
+            toast.success(`Deleted ${selectedMessageIds.size} message${selectedMessageIds.size > 1 ? 's' : ''}`);
+            setShowSelectionDelete(false);
+            setSelectedMessageIds(new Set());
             loadMessages({ silent: true });
         } catch (e) {
-            toast.error(`Failed to pin message: ${e}`);
+            toast.error(`Failed to delete: ${e}`);
         }
+    };
+
+    const handleSelectionStar = async () => {
+        for (const id of selectedMessageIds) {
+            const key = `${groupId}-${id}`;
+            if (!starStatus[key]) {
+                try {
+                    await invoke('cmd_star_message', { chatId: groupId, messageId: id });
+                    setStarStatus(prev => ({ ...prev, [key]: true }));
+                } catch {}
+            }
+        }
+        toast.success(`Starred ${selectedMessageIds.size} message${selectedMessageIds.size > 1 ? 's' : ''}`);
+        setSelectedMessageIds(new Set());
+    };
+
+    const handleSelectionCopy = async () => {
+        const texts = displayMessages
+            .filter(m => selectedMessageIds.has(m.id))
+            .map(m => m.text)
+            .filter(Boolean);
+        if (texts.length > 0) {
+            try {
+                await navigator.clipboard.writeText(texts.join('\n\n'));
+                toast.success('Copied to clipboard');
+            } catch {
+                toast.error('Failed to copy');
+            }
+        }
+        setSelectedMessageIds(new Set());
     };
 
     const handleVoice = async () => {
@@ -398,7 +674,7 @@ export function TeamChat({
                     const dir = await tempDir();
                     const filePath = await join(dir, `voice-${Date.now()}.webm`);
                     await writeFile(filePath, bytes);
-                    addPendingAttachment(filePath, 'Voice message');
+                    addPendingAttachment(filePath, 'Voice message', undefined, 'voice');
                     await invoke('cmd_upload_file', {
                         path: filePath,
                         folderId: groupId,
@@ -518,8 +794,9 @@ export function TeamChat({
         return 'file';
     };
 
-    const addPendingAttachment = (path: string, displayName?: string, caption?: string) => {
+    const addPendingAttachment = (path: string, displayName?: string, caption?: string, mediaType?: string) => {
         const fileName = displayName || getFileName(path);
+        const mtype = mediaType || getMediaTypeFromName(fileName);
         setMessages((current) => ([
             ...current,
             {
@@ -529,7 +806,7 @@ export function TeamChat({
                 text: caption || '',
                 date: new Date().toISOString().slice(0, 19).replace('T', ' '),
                 has_media: true,
-                media_type: getMediaTypeFromName(fileName),
+                media_type: mtype,
                 media_name: fileName,
                 media_size: 0,
                 mime_type: '',
@@ -564,16 +841,8 @@ export function TeamChat({
     const emojis = ['😀', '😂', '😍', '🔥', '👍', '🙏', '🎉', '❤️', '😎', '😮', '😢', '👏', '✅', '💡', '🚀', '📌', '📎', '☕'];
     const reactionEmojis = ['👍', '❤️', '😂', '🔥', '👏', '🎉'];
 
-    const saveReaction = (messageId: number, emoji: string) => {
-        const key = String(messageId);
-        const next = {
-            ...reactions,
-            [key]: reactions[key]?.includes(emoji)
-                ? reactions[key].filter(item => item !== emoji)
-                : [...(reactions[key] || []), emoji],
-        };
-        setReactions(next);
-        window.localStorage.setItem(`tgguild.reactions.${groupId ?? 'self'}`, JSON.stringify(next));
+    const handleReaction = async (messageId: number, emoji: string) => {
+        await realtime.toggleReaction(messageId, emoji);
         setReactionPickerFor(null);
     };
 
@@ -584,6 +853,7 @@ export function TeamChat({
                 return <ImageIcon className="w-5 h-5" />;
             case 'video':
                 return <Film className="w-5 h-5" />;
+            case 'voice':
             case 'audio':
                 return <Music className="w-5 h-5" />;
             case 'document':
@@ -591,6 +861,282 @@ export function TeamChat({
             default:
                 return <Paperclip className="w-5 h-5" />;
         }
+    };
+
+    const doSearch = useCallback((query: string) => {
+        if (!query.trim()) {
+            setSearchResultIds([]);
+            setSearchCurrentIdx(0);
+            return;
+        }
+        const lower = query.toLowerCase();
+        const ids = displayMessages
+            .filter((msg) => !msg.pending && msg.text.toLowerCase().includes(lower))
+            .map((msg) => msg.id);
+        setSearchResultIds(ids);
+        setSearchCurrentIdx(ids.length > 0 ? 0 : 0);
+    }, [displayMessages]);
+
+    useEffect(() => {
+        if (!searchOpen) return;
+        doSearch(searchQuery);
+    }, [messages, searchOpen, searchQuery, doSearch]);
+
+    const handleSearchToggle = () => {
+        setSearchOpen((open) => {
+            if (open) {
+                setSearchQuery('');
+                setSearchResultIds([]);
+                setSearchCurrentIdx(0);
+            }
+            return !open;
+        });
+    };
+
+    const handleClearChat = () => {
+        setShowThreeDotMenu(false);
+        setShowClearConfirm(true);
+    };
+
+    const confirmClearChat = () => {
+        const maxId = messages.reduce((max, msg) => Math.max(max, msg.id), 0);
+        const next = { ...clearedUpTo, [peerKey]: maxId };
+        setClearedUpTo(next);
+        try { window.localStorage.setItem('tgguild.clearedChats.v1', JSON.stringify(next)); } catch {}
+        setMessages([]);
+        try {
+            window.localStorage.removeItem(`tgguild.telegramMessages.v1.${peerKey}`);
+        } catch {}
+        setShowClearConfirm(false);
+        toast.success('Chat cleared');
+    };
+
+    const handleReply = (msg: ChatMessage) => {
+        setReplyTo(msg);
+        setEditingMessage(null);
+        inputRef.current?.focus();
+    };
+
+    const handleCopy = async (msg: ChatMessage) => {
+        if (!msg.text) return;
+        try {
+            await navigator.clipboard.writeText(msg.text);
+            toast.success('Copied to clipboard');
+        } catch {
+            toast.error('Failed to copy');
+        }
+    };
+
+    const handleStartEdit = (msg: ChatMessage) => {
+        setEditingMessage(msg);
+        setEditText(msg.text);
+        setReplyTo(null);
+        inputRef.current?.focus();
+    };
+
+    const handleCancelEdit = () => {
+        setEditingMessage(null);
+        setEditText('');
+    };
+
+    const handleSendEdit = async () => {
+        if (!editingMessage || !editText.trim()) return;
+        try {
+            await invoke('cmd_edit_message', {
+                teamId: groupId,
+                messageId: editingMessage.id,
+                text: editText.trim(),
+            });
+            setEditingMessage(null);
+            setEditText('');
+            toast.success('Message edited');
+            loadMessages({ silent: true });
+        } catch (e) {
+            toast.error(`Failed to edit: ${e}`);
+        }
+    };
+
+    const handleDeleteClick = (msg: ChatMessage) => {
+        setShowDeleteConfirm(msg);
+        setDeleteForEveryone(false);
+    };
+
+    const handleConfirmDelete = async () => {
+        if (!showDeleteConfirm) return;
+        const msg = showDeleteConfirm;
+        setShowDeleteConfirm(null);
+        try {
+            await invoke('cmd_delete_messages', {
+                teamId: groupId,
+                messageIds: [msg.id],
+                revoke: deleteForEveryone,
+            });
+            toast.success('Message deleted');
+            loadMessages({ silent: true });
+        } catch (e) {
+            toast.error(`Failed to delete: ${e}`);
+        }
+    };
+
+    const handleDeleteChat = async () => {
+        setShowThreeDotMenu(false);
+        if (!groupId) return;
+        if (!window.confirm('Delete this conversation? This action cannot be undone.')) return;
+        try {
+            await invoke('cmd_delete_direct_chat', { userId: groupId });
+            toast.success('Chat deleted');
+            window.location.reload();
+        } catch (e) {
+            toast.error(`Failed to delete chat: ${e}`);
+        }
+    };
+
+    const handleInvite = async () => {
+        setShowThreeDotMenu(false);
+        if (!groupId) return;
+        try {
+            const link = await invoke<string>('cmd_get_team_invite_link', { teamId: groupId });
+            await navigator.clipboard.writeText(link);
+            toast.success('Invite link copied to clipboard!');
+        } catch (e) {
+            toast.error(`Failed to generate invite link: ${e}`);
+        }
+    };
+
+    const handleStartMeeting = async () => {
+        if (!groupId) return;
+        try {
+            const status = await invoke<{ connected: boolean; email: string | null }>('cmd_google_auth_status');
+            if (!status.connected) {
+                const auth = await invoke<{ url: string; callback_port: number | null }>('cmd_google_auth_url');
+                window.location.href = auth.url;
+                toast.info('Complete Google authentication in your browser, then click the video button again.');
+                return;
+            }
+            const meet = await invoke<{ meet_url: string; event_id: string }>('cmd_google_create_meet', {
+                summary: groupName,
+                creatorName: '',
+            });
+            const msg = `Join Google Meet: ${meet.meet_url}`;
+            await invoke('cmd_send_team_message', { teamId: groupId, message: msg });
+            toast.success('Meeting created! Link sent to chat.');
+        } catch (e) {
+            toast.error(`Failed to create meeting: ${e}`);
+        }
+    };
+
+    const handleLeave = async () => {
+        setShowThreeDotMenu(false);
+        if (!groupId) return;
+        if (!window.confirm('Are you sure you want to leave this group? You can only rejoin via an invite link.')) return;
+        try {
+            await invoke('cmd_leave_team', { teamId: groupId });
+            toast.success('Left the group');
+            window.location.reload();
+        } catch (e) {
+            toast.error(`Failed to leave: ${e}`);
+        }
+    };
+
+    const handleSearchInput = (value: string) => {
+        setSearchQuery(value);
+        if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
+        searchTimerRef.current = setTimeout(() => doSearch(value), 200);
+    };
+
+    const handleSearchKeyDown = (e: React.KeyboardEvent) => {
+        if (e.key === 'Escape') {
+            handleSearchToggle();
+        } else if (e.key === 'Enter') {
+            e.preventDefault();
+            if (e.shiftKey) {
+                handleSearchPrev();
+            } else {
+                handleSearchNext();
+            }
+        }
+    };
+
+    const handleSearchNext = () => {
+        if (searchResultIds.length === 0) return;
+        setSearchCurrentIdx((prev) => {
+            const next = prev < searchResultIds.length - 1 ? prev + 1 : 0;
+            scrollToMessageId(searchResultIds[next]);
+            return next;
+        });
+    };
+
+    const handleSearchPrev = () => {
+        if (searchResultIds.length === 0) return;
+        setSearchCurrentIdx((prev) => {
+            const next = prev > 0 ? prev - 1 : searchResultIds.length - 1;
+            scrollToMessageId(searchResultIds[next]);
+            return next;
+        });
+    };
+
+    const scrollToMessageId = (messageId: number) => {
+        const el = document.getElementById(`msg-${messageId}`);
+        if (el) {
+            el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        } else if (beforeMessageId) {
+            loadOlderMessages();
+        }
+    };
+
+    const highlightText = (text: string, query: string) => {
+        if (!query.trim()) return text;
+        const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const parts = text.split(new RegExp(`(${escaped})`, 'gi'));
+        return parts.map((part, i) =>
+            part.toLowerCase() === query.toLowerCase()
+                ? <mark key={i} className="bg-yellow-300/60 text-inherit rounded-sm px-0.5">{part}</mark>
+                : part
+        );
+    };
+
+    const linkifyText = (text: string): React.ReactNode => {
+        const urlRegex = /(https?:\/\/[^\s<>"']+)/g;
+        const parts: React.ReactNode[] = [];
+        let lastIndex = 0;
+        let match: RegExpExecArray | null;
+        while ((match = urlRegex.exec(text)) !== null) {
+            if (match.index > lastIndex) {
+                parts.push(text.slice(lastIndex, match.index));
+            }
+            const url = match[0];
+            const validated = url.startsWith('https://') || url.startsWith('http://');
+            parts.push(
+                <a
+                    key={match.index}
+                    href={validated ? url : '#'}
+                    onClick={(e) => {
+                        e.preventDefault();
+                        if (validated) shellOpen(url);
+                    }}
+                    className="text-blue-400 hover:text-blue-300 underline underline-offset-2 decoration-blue-400/40 hover:decoration-blue-300/60 transition-colors break-all"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                >
+                    {url}
+                </a>
+            );
+            lastIndex = urlRegex.lastIndex;
+        }
+        if (lastIndex < text.length) {
+            parts.push(text.slice(lastIndex));
+        }
+        return parts.length > 0 ? parts : text;
+    };
+
+    const renderMessageContent = (text: string): React.ReactNode => {
+        if (searchOpen && searchQuery?.trim()) {
+            const highlighted = highlightText(text, searchQuery);
+            return (Array.isArray(highlighted) ? highlighted : [highlighted]).map((part) =>
+                typeof part === 'string' ? linkifyText(part) : part
+            );
+        }
+        return linkifyText(text);
     };
 
     return (
@@ -607,23 +1153,192 @@ export function TeamChat({
                         />
                     </div>
                     <div className="min-w-0">
-                        <h2 className="text-[15px] font-semibold text-telegram-text truncate">{groupName}</h2>
+                        <div className="flex items-center gap-2">
+                            <h2 className="text-[15px] font-semibold text-telegram-text truncate">{groupName}</h2>
+                            {isDirect && realtime.presence[String(groupId)]?.online && (
+                                <span className="w-2 h-2 rounded-full bg-green-500 shadow-[0_0_6px_rgba(34,197,94,0.5)] shrink-0" />
+                            )}
+                        </div>
                         <p className="text-xs text-telegram-subtext truncate">
-                            {isDirect ? 'direct chat' : `${memberCount ?? 0} members`}
+                            {realtime.typingText ? (
+                                <span className="text-telegram-primary animate-pulse">{realtime.typingText}</span>
+                            ) : isDirect ? (
+                                realtime.formatLastSeen(realtime.presence[String(groupId)]) || 'direct chat'
+                            ) : (
+                                `${memberCount ?? 0} members`
+                            )}
                         </p>
                     </div>
                 </div>
 
+                {searchOpen ? (
+                    <div className="flex items-center gap-2 flex-1 ml-4">
+                        <div className="flex items-center flex-1 gap-2 rounded-lg bg-telegram-hover px-3 py-1.5 border border-telegram-border">
+                            <Search className="w-4 h-4 text-telegram-subtext shrink-0" />
+                            <input
+                                ref={searchInputRef}
+                                type="text"
+                                value={searchQuery}
+                                onChange={(e) => handleSearchInput(e.target.value)}
+                                onKeyDown={handleSearchKeyDown}
+                                placeholder="Search messages..."
+                                className="flex-1 bg-transparent text-sm text-telegram-text placeholder:text-telegram-subtext outline-none min-w-0"
+                                autoFocus
+                            />
+                            {searchQuery && (
+                                <button onClick={() => { setSearchQuery(''); doSearch(''); }} className="p-0.5 text-telegram-subtext hover:text-telegram-text rounded-full">
+                                    <X className="w-4 h-4" />
+                                </button>
+                            )}
+                        </div>
+                        {searchResultIds.length > 0 && (
+                            <div className="flex items-center gap-1 shrink-0">
+                                <span className="text-xs text-telegram-subtext whitespace-nowrap">
+                                    {searchCurrentIdx + 1} of {searchResultIds.length}
+                                </span>
+                                <button
+                                    onClick={handleSearchPrev}
+                                    className="p-1.5 text-telegram-subtext hover:text-telegram-text hover:bg-telegram-hover rounded-md transition-colors"
+                                    title="Previous match (Shift+Enter)"
+                                >
+                                    <ArrowUp className="w-4 h-4" />
+                                </button>
+                                <button
+                                    onClick={handleSearchNext}
+                                    className="p-1.5 text-telegram-subtext hover:text-telegram-text hover:bg-telegram-hover rounded-md transition-colors"
+                                    title="Next match (Enter)"
+                                >
+                                    <ArrowDown className="w-4 h-4" />
+                                </button>
+                            </div>
+                        )}
+                        <button
+                            onClick={handleSearchToggle}
+                            className="p-2 text-telegram-subtext hover:text-telegram-text hover:bg-telegram-hover rounded-full transition-colors"
+                            title="Close search (Escape)"
+                        >
+                            <X className="w-5 h-5" />
+                        </button>
+                    </div>
+                ) : (
                 <div className="flex items-center gap-1">
-                    <button className="p-2 text-telegram-subtext hover:text-telegram-text hover:bg-telegram-hover rounded-full transition-colors" title="Search">
+                    <button
+                        onClick={handleSearchToggle}
+                        className="p-2 text-telegram-subtext hover:text-telegram-text hover:bg-telegram-hover rounded-full transition-colors"
+                        title="Search messages"
+                    >
                         <Search className="w-5 h-5" />
                     </button>
-                    <button className="p-2 text-telegram-subtext hover:text-telegram-text hover:bg-telegram-hover rounded-full transition-colors" title="Start meeting">
+                    <button
+                        onClick={handleStartMeeting}
+                        className="p-2 text-telegram-subtext hover:text-telegram-text hover:bg-telegram-hover rounded-full transition-colors"
+                        title="Start meeting"
+                    >
                         <Video className="w-5 h-5" />
                     </button>
-                    <button className="p-2 text-telegram-subtext hover:text-telegram-text hover:bg-telegram-hover rounded-full transition-colors mr-2" title="More">
-                        <MoreVertical className="w-5 h-5" />
-                    </button>
+                    <div className="relative">
+                        <button
+                            onClick={() => setShowThreeDotMenu(!showThreeDotMenu)}
+                            className="p-2 text-telegram-subtext hover:text-telegram-text hover:bg-telegram-hover rounded-full transition-colors"
+                            title="More"
+                        >
+                            <MoreVertical className="w-5 h-5" />
+                        </button>
+                        {showThreeDotMenu && (
+                            <div
+                                ref={menuRef}
+                                className="absolute right-0 top-full mt-1 w-56 bg-telegram-surface/95 backdrop-blur-xl border border-telegram-border rounded-xl shadow-2xl z-[1000] overflow-hidden animate-in fade-in zoom-in-95 duration-100"
+                            >
+                                {isDirect ? (
+                                    <>
+                                        <button
+                                            onClick={() => { setShowThreeDotMenu(false); handleSearchToggle(); }}
+                                            className="w-full flex items-center gap-3 px-3 py-2.5 text-sm text-telegram-text hover:bg-telegram-hover transition-colors"
+                                        >
+                                            <Search className="w-4 h-4 text-telegram-subtext" />
+                                            Search Messages
+                                        </button>
+                                        <button
+                                            onClick={() => { setShowThreeDotMenu(false); setSharedMediaTab('all'); setShowSharedMediaModal(true); }}
+                                            className="w-full flex items-center gap-3 px-3 py-2.5 text-sm text-telegram-text hover:bg-telegram-hover transition-colors"
+                                        >
+                                            <Paperclip className="w-4 h-4 text-telegram-subtext" />
+                                            Shared Files
+                                        </button>
+                                        <button
+                                            onClick={() => { setShowThreeDotMenu(false); setSharedMediaTab('media'); setShowSharedMediaModal(true); }}
+                                            className="w-full flex items-center gap-3 px-3 py-2.5 text-sm text-telegram-text hover:bg-telegram-hover transition-colors"
+                                        >
+                                            <ImageIcon className="w-4 h-4 text-telegram-subtext" />
+                                            Shared Media
+                                        </button>
+                                        <div className="h-px bg-telegram-border my-1" />
+                                        <button
+                                            onClick={handleClearChat}
+                                            className="w-full flex items-center gap-3 px-3 py-2.5 text-sm text-red-400 hover:bg-red-500/10 transition-colors"
+                                        >
+                                            <Trash2 className="w-4 h-4" />
+                                            Clear Chat
+                                        </button>
+                                        <button
+                                            onClick={handleDeleteChat}
+                                            className="w-full flex items-center gap-3 px-3 py-2.5 text-sm text-red-400 hover:bg-red-500/10 transition-colors"
+                                        >
+                                            <LogOut className="w-4 h-4" />
+                                            Delete Chat
+                                        </button>
+                                    </>
+                                ) : (
+                                    <>
+                                        <button
+                                            onClick={() => { setShowThreeDotMenu(false); handleSearchToggle(); }}
+                                            className="w-full flex items-center gap-3 px-3 py-2.5 text-sm text-telegram-text hover:bg-telegram-hover transition-colors"
+                                        >
+                                            <Search className="w-4 h-4 text-telegram-subtext" />
+                                            Search Messages
+                                        </button>
+                                        <button
+                                            onClick={() => { setShowThreeDotMenu(false); setShowMemberListModal(true); }}
+                                            className="w-full flex items-center gap-3 px-3 py-2.5 text-sm text-telegram-text hover:bg-telegram-hover transition-colors"
+                                        >
+                                            <Users className="w-4 h-4 text-telegram-subtext" />
+                                            Members List
+                                        </button>
+                                        <button
+                                            onClick={() => { setShowThreeDotMenu(false); setShowGroupInfoModal(true); }}
+                                            className="w-full flex items-center gap-3 px-3 py-2.5 text-sm text-telegram-text hover:bg-telegram-hover transition-colors"
+                                        >
+                                            <Info className="w-4 h-4 text-telegram-subtext" />
+                                            Group Info
+                                        </button>
+                                        <button
+                                            onClick={handleInvite}
+                                            className="w-full flex items-center gap-3 px-3 py-2.5 text-sm text-telegram-text hover:bg-telegram-hover transition-colors"
+                                        >
+                                            <Link2 className="w-4 h-4 text-telegram-subtext" />
+                                            Invite Members
+                                        </button>
+                                        <div className="h-px bg-telegram-border my-1" />
+                                        <button
+                                            onClick={handleClearChat}
+                                            className="w-full flex items-center gap-3 px-3 py-2.5 text-sm text-red-400 hover:bg-red-500/10 transition-colors"
+                                        >
+                                            <Trash2 className="w-4 h-4" />
+                                            Clear Chat
+                                        </button>
+                                        <div className="h-px bg-telegram-border my-1" />
+                                        <button
+                                            onClick={handleLeave}
+                                            className="w-full flex items-center gap-3 px-3 py-2.5 text-sm text-red-400 hover:bg-red-500/10 transition-colors"
+                                        >
+                                            <LogOut className="w-4 h-4" />
+                                            Leave Group
+                                        </button>
+                                    </>
+                                )}
+                            </div>
+                        )}
+                    </div>
 
                     {!isDirect && (
                         <div className="flex items-center gap-3 ml-2 border-l border-telegram-border pl-4">
@@ -684,8 +1399,33 @@ export function TeamChat({
                         </div>
                     )}
                 </div>
+                )}
             </div>
 
+            {showStarredView ? (
+                <StarredMessages
+                    open={showStarredView}
+                    onClose={() => setShowStarredView(false)}
+                    onJumpToMessage={(chatId, messageId) => {
+                        if (chatId === groupId) {
+                            const el = document.getElementById(`msg-${messageId}`);
+                            if (el) { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); return true; }
+                        }
+                        return false;
+                    }}
+                />
+            ) : (
+            <>
+            <PinnedMessagesBar
+                pinnedMessages={pinnedMessages}
+                onJumpToMessage={(messageId) => {
+                    const el = document.getElementById(`msg-${messageId}`);
+                    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                }}
+                onUnpin={(messageId) => handleUnpin(messageId)}
+                onShowAll={() => setShowStarredView(true)}
+                canUnpin={true}
+            />
             <div
                 ref={messagesContainerRef}
                 onScroll={handleMessagesScroll}
@@ -693,7 +1433,7 @@ export function TeamChat({
             >
                 {loading ? (
                     <div className="h-full flex items-center justify-center text-sm text-telegram-subtext">Loading messages...</div>
-                ) : error && messages.length === 0 ? (
+                ) : error && displayMessages.length === 0 ? (
                     <div className="h-full flex flex-col items-center justify-center text-sm text-telegram-subtext">
                         <p className="text-red-400">Error loading messages</p>
                         <p className="mt-2 max-w-md text-center text-xs">{error}</p>
@@ -701,9 +1441,9 @@ export function TeamChat({
                             Retry
                         </button>
                     </div>
-                ) : messages.length === 0 ? (
+                ) : displayMessages.length === 0 ? (
                     <div className="h-full flex items-center justify-center text-sm text-telegram-subtext">
-                        No messages yet
+                        {clearedUpTo[peerKey] ? 'Chat cleared' : 'No messages yet'}
                     </div>
                 ) : (
                     <div className="space-y-2">
@@ -718,13 +1458,13 @@ export function TeamChat({
                                 </button>
                             </div>
                         )}
-                        {messages.map((msg, index) => {
+                        {displayMessages.map((msg, index) => {
                             const outgoing = Boolean(msg.outgoing);
                             const currentDateKey = dateKeyForMessage(msg.date);
-                            const previousDateKey = index > 0 ? dateKeyForMessage(messages[index - 1].date) : null;
+                            const previousDateKey = index > 0 ? dateKeyForMessage(displayMessages[index - 1].date) : null;
                             const showDateSeparator = currentDateKey !== previousDateKey;
                             return (
-                                <div key={msg.id}>
+                                <div key={msg.id} id={`msg-${msg.id}`}>
                                     {showDateSeparator && (
                                         <div className="sticky top-2 z-10 my-4 flex justify-center">
                                             <span className="rounded-full border border-telegram-border bg-telegram-surface/95 px-3 py-1 text-[11px] font-medium text-telegram-subtext shadow-sm backdrop-blur transition-colors">
@@ -733,7 +1473,7 @@ export function TeamChat({
                                         </div>
                                     )}
                                     <div className={`group flex ${outgoing ? 'justify-end' : 'justify-start'}`}>
-                                        <div className={`flex gap-2 max-w-[78%] ${outgoing ? 'flex-row-reverse' : ''}`}>
+                                        <div className={`relative flex gap-2 max-w-[78%] ${outgoing ? 'flex-row-reverse' : ''}`}>
                                             {!outgoing && !isDirect && (
                                                 <TelegramAvatar
                                                     user={{ user_id: msg.sender_id, first_name: msg.sender_name, photo_url: msg.sender_photo_url }}
@@ -743,11 +1483,36 @@ export function TeamChat({
                                                     className="mt-1"
                                                 />
                                             )}
+                                            <MessageActions
+                                                isOutgoing={outgoing}
+                                                canEdit={Boolean(outgoing && !msg.pending)}
+                                                onReply={() => handleReply(msg)}
+                                                onCopy={() => handleCopy(msg)}
+                                                onEdit={() => handleStartEdit(msg)}
+                                                onDelete={() => handleDeleteClick(msg)}
+                                                onInfo={() => setShowMessageInfo(msg)}
+                                                onReact={() => setReactionPickerFor(reactionPickerFor === msg.id ? null : msg.id)}
+                                                onPin={() => handlePin(msg.id)}
+                                                isPinned={pinnedMessages.some(p => p.message_id === msg.id)}
+                                                onStar={() => handleStarToggle(msg.id)}
+                                                isStarred={starStatus[`${groupId}-${msg.id}`] || false}
+                                                onForward={() => handleForwardSingle(msg.id)}
+                                                isSelected={selectedMessageIds.has(msg.id)}
+                                                onToggleSelect={() => handleToggleSelect(msg.id)}
+                                            />
                                             <div
                                                 className={`rounded-[18px] px-3 py-2 shadow-sm transition-colors duration-300 ${
                                                     outgoing
                                                         ? 'rounded-br-md bg-telegram-primary/10 text-telegram-text border border-telegram-primary/20'
                                                         : 'rounded-bl-md bg-telegram-surface text-telegram-text border border-telegram-border'
+                                                } ${
+                                                    searchOpen && searchResultIds[searchCurrentIdx] === msg.id
+                                                        ? 'ring-2 ring-telegram-primary/60'
+                                                        : ''
+                                                } ${
+                                                    selectedMessageIds.has(msg.id)
+                                                        ? 'ring-2 ring-telegram-primary'
+                                                        : ''
                                                 }`}
                                             >
                                                 {!outgoing && !isDirect && (
@@ -760,6 +1525,15 @@ export function TeamChat({
                                                                 <img src={mediaStreamUrl(msg) || ''} alt="" className="max-h-80 w-full object-cover" />
                                                             </button>
                                                         ) : null}
+                                                        {msg.media_type === 'voice' ? (
+                                                            <div className={`rounded-xl p-3 ${outgoing ? 'bg-telegram-primary/20' : 'bg-telegram-hover'}`}>
+                                                                <VoiceMessage
+                                                                    streamUrl={mediaStreamUrl(msg)}
+                                                                    duration={msg.audio_duration}
+                                                                    pending={msg.pending}
+                                                                />
+                                                            </div>
+                                                        ) : ['photo', 'image'].includes(msg.media_type) ? null : (
                                                         <button
                                                             onClick={() => handleDownload(msg)}
                                                             disabled={downloadingId === msg.id || msg.pending}
@@ -776,31 +1550,61 @@ export function TeamChat({
                                                             </span>
                                                             {!msg.pending && <Download className="w-4 h-4 opacity-75" />}
                                                         </button>
+                                                        )}
                                                     </div>
                                                 )}
                                                 {msg.text && (
-                                                    <p className="whitespace-pre-wrap break-words text-sm leading-relaxed">{msg.text}</p>
+                                                    <p className="whitespace-pre-wrap break-words text-sm leading-relaxed">
+                                                        {renderMessageContent(msg.text)}
+                                                    </p>
                                                 )}
-                                                <div className={`mt-1 flex items-center justify-end gap-2 text-[10px] ${outgoing ? 'text-telegram-primary/60' : 'text-telegram-subtext'}`}>
-                                                    {msg.pinned && <Pin className="h-3 w-3" />}
+                                                <div className={`mt-1 flex items-center justify-end gap-1.5 text-[10px] ${outgoing ? 'text-telegram-primary/60' : 'text-telegram-subtext'}`}>
+                                                    {msg.edited && <span className="italic">edited</span>}
+                                                    {starStatus[`${groupId}-${msg.id}`] && <Star className="h-3 w-3 fill-yellow-400 text-yellow-400" />}
+                                                    {pinnedMessages.some(p => p.message_id === msg.id) && <Pin className="h-3 w-3 rotate-45 text-telegram-primary" />}
                                                     <button
                                                         onClick={() => handlePin(msg.id)}
-                                                        className="opacity-0 transition-opacity hover:opacity-100 group-hover:opacity-100"
-                                                        title="Pin message"
+                                                        className={`opacity-0 transition-opacity hover:opacity-100 group-hover:opacity-100 ${
+                                                            pinnedMessages.some(p => p.message_id === msg.id) ? 'text-telegram-primary' : ''
+                                                        }`}
+                                                        title={pinnedMessages.some(p => p.message_id === msg.id) ? 'Unpin' : 'Pin'}
                                                     >
-                                                        <Pin className="h-3 w-3" />
+                                                        <Pin className={`h-3 w-3 ${pinnedMessages.some(p => p.message_id === msg.id) ? 'rotate-45' : ''}`} />
                                                     </button>
                                                     <span>{formatTime(msg.date)}</span>
+                                                    {outgoing && !msg.pending && (
+                                                        <span className="flex items-center" title={
+                                                            isDirect
+                                                                ? (realtime.readStatuses[msg.id]?.is_read ? 'Read' : 'Delivered')
+                                                                : `${realtime.readStatuses[msg.id]?.read_count || 0} read`
+                                                        }>
+                                                            {isDirect ? (
+                                                                realtime.readStatuses[msg.id]?.is_read
+                                                                    ? <CheckCheck className="w-3.5 h-3.5 text-blue-400" />
+                                                                    : <CheckCheck className="w-3.5 h-3.5" />
+                                                            ) : (
+                                                                <span className="flex items-center gap-0.5 text-telegram-subtext">
+                                                                    <CheckCheck className="w-3 h-3" />
+                                                                    <span>{realtime.readStatuses[msg.id]?.read_count || 0}</span>
+                                                                </span>
+                                                            )}
+                                                        </span>
+                                                    )}
                                                 </div>
-                                                {(reactions[String(msg.id)]?.length || reactionPickerFor === msg.id) && (
+                                                {(realtime.reactions[String(msg.id)]?.length || reactionPickerFor === msg.id) && (
                                                     <div className="relative mt-1 flex flex-wrap justify-end gap-1">
-                                                        {reactions[String(msg.id)]?.map(emoji => (
+                                                        {realtime.reactions[String(msg.id)]?.map(reaction => (
                                                             <button
-                                                                key={emoji}
-                                                                onClick={() => saveReaction(msg.id, emoji)}
-                                                                className="rounded-full bg-telegram-hover px-2 py-0.5 text-xs transition-colors"
+                                                                key={reaction.emoji}
+                                                                onClick={() => handleReaction(msg.id, reaction.emoji)}
+                                                                title={reaction.reactors.length > 0 ? reaction.reactors.join(', ') : undefined}
+                                                                className={`rounded-full px-2 py-0.5 text-xs transition-colors ${
+                                                                    reaction.chosen
+                                                                        ? 'bg-telegram-primary/20 border border-telegram-primary/40'
+                                                                        : 'bg-telegram-hover hover:bg-telegram-border'
+                                                                }`}
                                                             >
-                                                                {emoji}
+                                                                {reaction.emoji} {reaction.count > 1 && <span className="ml-0.5">{reaction.count}</span>}
                                                             </button>
                                                         ))}
                                                         {reactionPickerFor === msg.id && (
@@ -808,7 +1612,7 @@ export function TeamChat({
                                                                 {reactionEmojis.map(emoji => (
                                                                     <button
                                                                         key={emoji}
-                                                                        onClick={() => saveReaction(msg.id, emoji)}
+                                                                        onClick={() => handleReaction(msg.id, emoji)}
                                                                         className="rounded-full p-1.5 text-lg hover:bg-telegram-hover transition-colors"
                                                                     >
                                                                         {emoji}
@@ -820,8 +1624,9 @@ export function TeamChat({
                                                 )}
                                                 <button
                                                     onClick={() => setReactionPickerFor(reactionPickerFor === msg.id ? null : msg.id)}
-                                                    className="mt-1 text-[10px] text-telegram-subtext opacity-0 transition-opacity group-hover:opacity-100"
+                                                    className="mt-1 text-[10px] text-telegram-subtext opacity-0 transition-opacity group-hover:opacity-100 hover:text-telegram-primary"
                                                 >
+                                                    <Share2 className="w-3 h-3 inline-block mr-0.5" />
                                                     React
                                                 </button>
                                             </div>
@@ -909,45 +1714,274 @@ export function TeamChat({
                         </button>
                     </div>
                 ) : (
-                <div className="flex items-end gap-2 rounded-[22px] bg-telegram-hover px-2 py-2 border border-telegram-border transition-colors">
-                    <button
-                        onClick={handleAttach}
-                        disabled={uploading}
-                        className="p-2 text-telegram-subtext hover:text-telegram-text rounded-full transition-colors disabled:opacity-50"
-                        title="Attach"
-                    >
-                        <Paperclip className={`w-5 h-5 ${uploading ? 'animate-pulse' : ''}`} />
-                    </button>
-                    <button onClick={handleMention} className="p-2 text-telegram-subtext hover:text-telegram-text rounded-full transition-colors" title="Mention">
-                        <AtSign className="w-5 h-5" />
-                    </button>
-                    <input
-                        ref={inputRef}
-                        type="text"
-                        value={newMessage}
-                        onChange={(e) => setNewMessage(e.target.value)}
-                        onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && (e.preventDefault(), handleSend())}
-                        placeholder="Message"
-                        className="min-h-10 flex-1 bg-transparent px-1 py-2 text-sm text-telegram-text placeholder:text-telegram-subtext outline-none"
-                        disabled={sending}
-                    />
-                    <button onClick={() => setShowEmojiPicker(value => !value)} className="p-2 text-telegram-subtext hover:text-telegram-text rounded-full transition-colors" title="Emoji">
-                        <Smile className="w-5 h-5" />
-                    </button>
-                    <button onClick={handleVoice} className={`p-2 rounded-full transition-colors ${recording ? 'bg-red-500 text-white animate-pulse' : 'text-telegram-subtext hover:text-telegram-text'}`} title={recording ? 'Stop and send voice' : 'Voice'}>
-                        <Mic className="w-5 h-5" />
-                    </button>
-                    <button
-                        onClick={handleSend}
-                        disabled={(!newMessage.trim() && !attachmentDraft) || sending || uploading}
-                        className="p-2 bg-telegram-primary text-white rounded-full hover:bg-telegram-primary/90 transition-colors disabled:opacity-50"
-                        title="Send"
-                    >
-                        <Send className="w-5 h-5" />
-                    </button>
+                <div className="space-y-1">
+                    {replyTo && (
+                        <div
+                            className="flex items-center gap-2 rounded-xl bg-telegram-hover/60 px-3 py-2 border border-telegram-border/50 cursor-pointer hover:bg-telegram-hover transition-colors"
+                            onClick={() => {
+                                const el = document.getElementById(`msg-${replyTo.id}`);
+                                if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                            }}
+                        >
+                            <div className="h-8 w-0.5 shrink-0 rounded-full bg-telegram-primary" />
+                            <div className="min-w-0 flex-1">
+                                <p className="text-xs font-medium text-telegram-primary truncate">{replyTo.sender_name}</p>
+                                <p className="text-xs text-telegram-subtext truncate">{replyTo.text || replyTo.media_name || 'Media'}</p>
+                            </div>
+                            <button
+                                onClick={(e) => { e.stopPropagation(); setReplyTo(null); }}
+                                className="shrink-0 rounded-full p-1 text-telegram-subtext hover:bg-telegram-hover hover:text-telegram-text transition-colors"
+                                title="Cancel reply"
+                            >
+                                <X className="w-4 h-4" />
+                            </button>
+                        </div>
+                    )}
+                    {editingMessage && (
+                        <div className="flex items-center gap-2 rounded-xl bg-telegram-hover/60 px-3 py-2 border border-l-2 border-l-yellow-400 border-telegram-border/50">
+                            <div className="min-w-0 flex-1">
+                                <p className="text-xs font-medium text-yellow-400">Editing message</p>
+                                <p className="text-xs text-telegram-subtext truncate">{editingMessage.text || 'Media message'}</p>
+                            </div>
+                            <button
+                                onClick={() => { handleCancelEdit(); realtime.sendTyping(false); }}
+                                className="shrink-0 rounded-full p-1 text-telegram-subtext hover:bg-telegram-hover hover:text-telegram-text transition-colors"
+                                title="Cancel edit"
+                            >
+                                <X className="w-4 h-4" />
+                            </button>
+                        </div>
+                    )}
+                    <div className="flex items-end gap-2 rounded-[22px] bg-telegram-hover px-2 py-2 border border-telegram-border transition-colors">
+                        <button
+                            onClick={handleAttach}
+                            disabled={uploading}
+                            className="p-2 text-telegram-subtext hover:text-telegram-text rounded-full transition-colors disabled:opacity-50"
+                            title="Attach"
+                        >
+                            <Paperclip className={`w-5 h-5 ${uploading ? 'animate-pulse' : ''}`} />
+                        </button>
+                        <button onClick={handleMention} className="p-2 text-telegram-subtext hover:text-telegram-text rounded-full transition-colors" title="Mention">
+                            <AtSign className="w-5 h-5" />
+                        </button>
+                        <input
+                            ref={inputRef}
+                            type="text"
+                            value={editingMessage ? editText : newMessage}
+                            onChange={(e) => {
+                                if (editingMessage) {
+                                    setEditText(e.target.value);
+                                } else {
+                                    setNewMessage(e.target.value);
+                                    realtime.handleInputChange();
+                                }
+                            }}
+                            onKeyDown={(e) => {
+                                if (e.key === 'Enter' && !e.shiftKey) {
+                                    e.preventDefault();
+                                    realtime.sendTyping(false);
+                                    handleSend();
+                                }
+                            }}
+                            placeholder={editingMessage ? 'Edit message...' : replyTo ? 'Reply...' : 'Message'}
+                            className="min-h-10 flex-1 bg-transparent px-1 py-2 text-sm text-telegram-text placeholder:text-telegram-subtext outline-none"
+                            disabled={sending}
+                        />
+                        <button onClick={() => setShowEmojiPicker(value => !value)} className="p-2 text-telegram-subtext hover:text-telegram-text rounded-full transition-colors" title="Emoji">
+                            <Smile className="w-5 h-5" />
+                        </button>
+                        <button onClick={handleVoice} className={`p-2 rounded-full transition-colors ${recording ? 'bg-red-500 text-white animate-pulse' : 'text-telegram-subtext hover:text-telegram-text'}`} title={recording ? 'Stop and send voice' : 'Voice'}>
+                            <Mic className="w-5 h-5" />
+                        </button>
+                        <button
+                            onClick={handleSend}
+                            disabled={(!newMessage.trim() && !editText.trim() && !attachmentDraft) || sending || uploading}
+                            className="p-2 bg-telegram-primary text-white rounded-full hover:bg-telegram-primary/90 transition-colors disabled:opacity-50"
+                            title={editingMessage ? 'Save' : 'Send'}
+                        >
+                            {editingMessage ? <Check className="w-5 h-5" /> : <Send className="w-5 h-5" />}
+                        </button>
+                    </div>
                 </div>
                 )}
             </div>
+
+            {!showStarredView && (
+                <SelectionBar
+                    selectedCount={selectedMessageIds.size}
+                    onCancel={handleCancelSelection}
+                    onForward={() => setShowForwardModal(true)}
+                    onDelete={() => setShowSelectionDelete(true)}
+                    onStar={handleSelectionStar}
+                    onCopy={handleSelectionCopy}
+                    canStar={true}
+                />
+            )}
+            <SelectionDeleteConfirm
+                open={showSelectionDelete}
+                count={selectedMessageIds.size}
+                onConfirm={handleSelectionDelete}
+                onCancel={() => setShowSelectionDelete(false)}
+            />
+            <ForwardPickerModal
+                open={showForwardModal}
+                onClose={() => { setShowForwardModal(false); handleCancelSelection(); }}
+                onForward={handleForward}
+            />
+            </>
+            )}
+
+            {showMemberListModal && groupId && (
+                <MemberListModal groupId={groupId} onClose={() => setShowMemberListModal(false)} />
+            )}
+            {showGroupInfoModal && groupId && (
+                <GroupInfoModal groupId={groupId} groupName={groupName} onClose={() => setShowGroupInfoModal(false)} />
+            )}
+            {showClearConfirm && (
+                <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 backdrop-blur-sm">
+                    <div className="w-80 rounded-2xl bg-telegram-surface border border-telegram-border shadow-2xl p-6 animate-in fade-in zoom-in-95 duration-100">
+                        <h3 className="text-lg font-semibold text-telegram-text mb-2">Clear Chat</h3>
+                        <p className="text-sm text-telegram-subtext leading-relaxed mb-6">
+                            Clear all messages from your view? This only affects you — other members will still see their messages.
+                        </p>
+                        <div className="flex gap-3 justify-end">
+                            <button
+                                onClick={() => setShowClearConfirm(false)}
+                                className="px-4 py-2 rounded-xl text-sm font-medium text-telegram-text hover:bg-telegram-hover transition-colors"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                onClick={confirmClearChat}
+                                className="px-4 py-2 rounded-xl text-sm font-medium bg-red-500 text-white hover:bg-red-600 transition-colors"
+                            >
+                                Clear
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+            {showDeleteConfirm && (
+                <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 backdrop-blur-sm" onClick={() => setShowDeleteConfirm(null)}>
+                    <div className="w-80 rounded-2xl bg-telegram-surface border border-telegram-border shadow-2xl p-6 animate-in fade-in zoom-in-95 duration-100" onClick={(e) => e.stopPropagation()}>
+                        <h3 className="text-lg font-semibold text-telegram-text mb-2">Delete Message</h3>
+                        <p className="text-sm text-telegram-subtext leading-relaxed mb-4">
+                            Choose how to delete this message.
+                        </p>
+                        {showDeleteConfirm.outgoing && (
+                            <label className="flex items-center gap-3 rounded-xl bg-telegram-hover/50 px-3 py-2.5 mb-2 cursor-pointer hover:bg-telegram-hover transition-colors">
+                                <input
+                                    type="checkbox"
+                                    checked={deleteForEveryone}
+                                    onChange={(e) => setDeleteForEveryone(e.target.checked)}
+                                    className="rounded accent-red-500"
+                                />
+                                <span className="text-sm text-telegram-text">Delete for everyone</span>
+                            </label>
+                        )}
+                        <div className="flex gap-3 justify-end">
+                            <button
+                                onClick={() => setShowDeleteConfirm(null)}
+                                className="px-4 py-2 rounded-xl text-sm font-medium text-telegram-text hover:bg-telegram-hover transition-colors"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                onClick={handleConfirmDelete}
+                                className="px-4 py-2 rounded-xl text-sm font-medium bg-red-500 text-white hover:bg-red-600 transition-colors"
+                            >
+                                Delete
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+            {showMessageInfo && (
+                <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 backdrop-blur-sm" onClick={() => setShowMessageInfo(null)}>
+                    <div className="w-80 rounded-2xl bg-telegram-surface border border-telegram-border shadow-2xl p-6 animate-in fade-in zoom-in-95 duration-100" onClick={(e) => e.stopPropagation()}>
+                        <h3 className="text-lg font-semibold text-telegram-text mb-4">Message Info</h3>
+                        <div className="space-y-3 text-sm">
+                            <div>
+                                <span className="text-telegram-subtext text-xs">Sender</span>
+                                <p className="text-telegram-text">{showMessageInfo.sender_name}</p>
+                            </div>
+                            <div>
+                                <span className="text-telegram-subtext text-xs">Sent</span>
+                                <p className="text-telegram-text">{showMessageInfo.date}</p>
+                            </div>
+                            {showMessageInfo.edited && (
+                                <div>
+                                    <span className="text-telegram-subtext text-xs">Status</span>
+                                    <p className="text-telegram-text italic">Edited</p>
+                                </div>
+                            )}
+                            {showMessageInfo.has_media && showMessageInfo.media_name && (
+                                <div>
+                                    <span className="text-telegram-subtext text-xs">File</span>
+                                    <p className="text-telegram-text truncate">{showMessageInfo.media_name}</p>
+                                </div>
+                            )}
+                            {showMessageInfo.outgoing && (
+                                <div>
+                                    <span className="text-telegram-subtext text-xs">Read Receipts</span>
+                                    {isDirect ? (
+                                        <div className="flex items-center gap-2 mt-1">
+                                            {realtime.readStatuses[showMessageInfo.id]?.is_read ? (
+                                                <span className="text-blue-400 text-xs flex items-center gap-1">
+                                                    <CheckCheck className="w-3.5 h-3.5" /> Read
+                                                </span>
+                                            ) : (
+                                                <span className="text-telegram-subtext text-xs flex items-center gap-1">
+                                                    <CheckCheck className="w-3.5 h-3.5" /> Delivered
+                                                </span>
+                                            )}
+                                        </div>
+                                    ) : (
+                                        <p className="text-telegram-text text-xs mt-1">
+                                            Read by {realtime.readStatuses[showMessageInfo.id]?.read_count || 0} of {memberCount || 0} members
+                                        </p>
+                                    )}
+                                </div>
+                            )}
+                            {realtime.reactions[String(showMessageInfo.id)]?.length > 0 && (
+                                <div>
+                                    <span className="text-telegram-subtext text-xs">Reactions</span>
+                                    <div className="flex flex-wrap gap-1 mt-1">
+                                        {realtime.reactions[String(showMessageInfo.id)]?.map(r => (
+                                            <span key={r.emoji} className="rounded-full bg-telegram-hover px-2 py-0.5 text-xs">
+                                                {r.emoji} {r.count}
+                                            </span>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+                            <div>
+                                <span className="text-telegram-subtext text-xs">ID</span>
+                                <p className="text-telegram-text font-mono">{showMessageInfo.id}</p>
+                            </div>
+                        </div>
+                        <div className="flex justify-end mt-4">
+                            <button
+                                onClick={() => setShowMessageInfo(null)}
+                                className="px-4 py-2 rounded-xl text-sm font-medium text-telegram-text hover:bg-telegram-hover transition-colors"
+                            >
+                                Close
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+            {showSharedMediaModal && (
+                <SharedMediaModal
+                    messages={messages}
+                    groupName={groupName}
+                    onClose={() => setShowSharedMediaModal(false)}
+                    onDownload={handleDownload}
+                    formatFileSize={formatFileSize}
+                    formatTime={formatTime}
+                    initialTab={sharedMediaTab}
+                />
+            )}
         </div>
     );
 }
