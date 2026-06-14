@@ -565,6 +565,16 @@ export function Dashboard({ onLogout }: { onLogout: () => void }) {
                             mentionableMembers={activeMembers}
                             members={activeMembers}
                             onManageMembers={() => setShowAddSubscriber(true)}
+                            onOpenDirectChat={(user) => {
+                                setActiveGroupId(null);
+                                setActiveFolderId(null);
+                                setActiveCompanyManagement(false);
+                                setActiveDirectChat({
+                                    user_id: String(user.user_id),
+                                    first_name: user.first_name,
+                                    photo_url: user.photo_url || null,
+                                });
+                            }}
                         />
                     </div>
                 ) : (

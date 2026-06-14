@@ -118,6 +118,7 @@ interface TeamChatProps {
     isDirect?: boolean;
     mentionableMembers?: MentionableMember[];
     onManageMembers?: () => void;
+    onOpenDirectChat?: (user: { user_id: number; first_name: string; photo_url?: string | null }) => void;
     members?: any[];
 }
 
@@ -130,6 +131,7 @@ export function TeamChat({
     isDirect = false,
     mentionableMembers = [],
     onManageMembers,
+    onOpenDirectChat,
     members: propMembers = [],
 }: TeamChatProps) {
     const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -1475,13 +1477,18 @@ export function TeamChat({
                                     <div className={`group flex ${outgoing ? 'justify-end' : 'justify-start'}`}>
                                         <div className={`relative flex gap-2 max-w-[78%] ${outgoing ? 'flex-row-reverse' : ''}`}>
                                             {!outgoing && !isDirect && (
-                                                <TelegramAvatar
-                                                    user={{ user_id: msg.sender_id, first_name: msg.sender_name, photo_url: msg.sender_photo_url }}
-                                                    token={streamToken}
-                                                    baseUrl={streamBaseUrl}
-                                                    size="md"
-                                                    className="mt-1"
-                                                />
+                                                <div
+                                                    className="cursor-pointer"
+                                                    onClick={() => onOpenDirectChat?.({ user_id: msg.sender_id, first_name: msg.sender_name, photo_url: msg.sender_photo_url })}
+                                                >
+                                                    <TelegramAvatar
+                                                        user={{ user_id: msg.sender_id, first_name: msg.sender_name, photo_url: msg.sender_photo_url }}
+                                                        token={streamToken}
+                                                        baseUrl={streamBaseUrl}
+                                                        size="md"
+                                                        className="mt-1"
+                                                    />
+                                                </div>
                                             )}
                                             <MessageActions
                                                 isOutgoing={outgoing}
@@ -1516,7 +1523,12 @@ export function TeamChat({
                                                 }`}
                                             >
                                                 {!outgoing && !isDirect && (
-                                                    <p className="mb-1 text-xs font-semibold text-telegram-primary">{msg.sender_name}</p>
+                                                    <p
+                                                        className="mb-1 text-xs font-semibold text-telegram-primary cursor-pointer hover:underline"
+                                                        onClick={() => onOpenDirectChat?.({ user_id: msg.sender_id, first_name: msg.sender_name, photo_url: msg.sender_photo_url })}
+                                                    >
+                                                        {msg.sender_name}
+                                                    </p>
                                                 )}
                                                 {msg.has_media && msg.media_type !== 'none' && (
                                                     <div className="mb-2 overflow-hidden rounded-xl">
