@@ -43,7 +43,7 @@ import { TelegramAvatar } from './TelegramAvatar';
 import { MemberStack } from './MemberStack';
 import { VoiceMessage } from './VoiceMessage';
 import { readTelegramMessageCache, saveTelegramMessageCache } from './telegramCache';
-import { GroupInfoModal } from './GroupInfoModal';
+import { GroupInfo } from './GroupInfo';
 import { MemberListModal } from './MemberListModal';
 import { SharedMediaModal } from './SharedMediaModal';
 import { MessageActions } from './MessageActions';
@@ -1154,7 +1154,11 @@ export function TeamChat({
         <div className="flex-1 flex flex-col bg-telegram-bg overflow-hidden transition-colors duration-300">
             <div className="h-14 px-4 border-b border-telegram-border bg-telegram-surface flex items-center justify-between flex-shrink-0 transition-colors duration-300">
                 <div className="flex items-center gap-3 min-w-0">
-                    <div className="w-10 h-10 rounded-full bg-telegram-hover text-telegram-text flex items-center justify-center overflow-hidden transition-colors">
+                    <div
+                        className="w-10 h-10 rounded-full bg-telegram-hover text-telegram-text flex items-center justify-center overflow-hidden transition-colors cursor-pointer"
+                        onClick={() => !isDirect && setShowGroupInfoModal(true)}
+                        title={isDirect ? '' : 'View group info'}
+                    >
                         <TelegramAvatar
                             user={{ user_id: groupId ?? 'self', first_name: groupName, photo_url: groupPhotoUrl }}
                             token={streamToken}
@@ -1165,12 +1169,20 @@ export function TeamChat({
                     </div>
                     <div className="min-w-0">
                         <div className="flex items-center gap-2">
-                            <h2 className="text-[15px] font-semibold text-telegram-text truncate">{groupName}</h2>
+                            <h2
+                                className="text-[15px] font-semibold text-telegram-text truncate cursor-pointer"
+                                onClick={() => !isDirect && setShowGroupInfoModal(true)}
+                                title={isDirect ? '' : 'View group info'}
+                            >{groupName}</h2>
                             {isDirect && realtime.presence[String(groupId)]?.online && (
                                 <span className="w-2 h-2 rounded-full bg-green-500 shadow-[0_0_6px_rgba(34,197,94,0.5)] shrink-0" />
                             )}
                         </div>
-                        <p className="text-xs text-telegram-subtext truncate">
+                        <p
+                            className="text-xs text-telegram-subtext truncate cursor-pointer"
+                            onClick={() => !isDirect && setShowGroupInfoModal(true)}
+                            title={isDirect ? '' : 'View group info'}
+                        >
                             {realtime.typingText ? (
                                 <span className="text-telegram-primary animate-pulse">{realtime.typingText}</span>
                             ) : isDirect ? (
@@ -1890,7 +1902,18 @@ export function TeamChat({
                 <MemberListModal groupId={groupId} onClose={() => setShowMemberListModal(false)} />
             )}
             {showGroupInfoModal && groupId && (
-                <GroupInfoModal groupId={groupId} groupName={groupName} onClose={() => setShowGroupInfoModal(false)} />
+                <GroupInfo
+                    groupId={groupId}
+                    groupName={groupName}
+                    groupPhotoUrl={groupPhotoUrl}
+                    streamToken={streamToken}
+                    streamBaseUrl={streamBaseUrl}
+                    canManageMembers={canManageMembers}
+                    currentUserId={currentUserId}
+                    onClose={() => setShowGroupInfoModal(false)}
+                    onOpenDirectChat={onOpenDirectChat}
+                    isDirect={isDirect}
+                />
             )}
             {showClearConfirm && (
                 <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 backdrop-blur-sm">

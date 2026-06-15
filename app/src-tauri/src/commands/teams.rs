@@ -1194,6 +1194,42 @@ pub async fn cmd_get_team_invite_link(
 }
 
 #[tauri::command]
+pub async fn cmd_revoke_invite_link(
+    team_id: i64,
+    state: State<'_, TelegramState>,
+) -> Result<String, String> {
+    let client_opt = state.client.lock().await.clone();
+    if client_opt.is_none() {
+        return Err("Not connected".to_string());
+    }
+    let client = client_opt.unwrap();
+
+    let peer = resolve_peer(&client, Some(team_id), &state.peer_cache).await?;
+    let input_peer = peer_to_input_peer(&peer)?;
+
+    // Export a new invite link, which revokes the previous one for legacy groups
+    let exported = client
+        .invoke(&tl::functions::messages::ExportChatInvite {
+            legacy_revoke_permanent: false,
+            request_needed: false,
+            peer: input_peer,
+            expire_date: None,
+            usage_limit: None,
+            title: Some("TgGuild invite".to_string()),
+            subscription_pricing: None,
+        })
+        .await
+        .map_err(|e| format!("Failed to create new invite link: {}", e))?;
+
+    match exported {
+        tl::enums::ExportedChatInvite::ChatInviteExported(invite) => Ok(invite.link),
+        tl::enums::ExportedChatInvite::ChatInvitePublicJoinRequests => {
+            Err("This group requires join approval. Invite links not available.".to_string())
+        }
+    }
+}
+
+#[tauri::command]
 pub async fn cmd_leave_team(
     team_id: i64,
     state: State<'_, TelegramState>,
@@ -1729,16 +1765,53 @@ pub async fn cmd_create_team(
         .await
         .map_err(|e| format!("Failed to create team: {}", e))?;
 
-    let (id, username) = match result {
+    let (id, username, access_hash) = match result {
         tl::enums::Updates::Updates(u) => {
             let chat = u.chats.first().ok_or("No chat in updates")?;
             match chat {
-                tl::enums::Chat::Channel(c) => (c.id, c.username.clone()),
+                tl::enums::Chat::Channel(c) => (
+                    c.id,
+                    c.username.clone(),
+                    c.access_hash.unwrap_or(0),
+                ),
                 _ => return Err("Created chat is not a channel".to_string()),
             }
         }
         _ => return Err("Unexpected response".to_string()),
     };
+
+    // Enable everyone to pin messages
+    let _ = client
+        .invoke(&tl::functions::messages::EditChatDefaultBannedRights {
+            peer: tl::enums::InputPeer::Channel(tl::types::InputPeerChannel {
+                channel_id: id,
+                access_hash,
+            }),
+            banned_rights: tl::enums::ChatBannedRights::Rights(tl::types::ChatBannedRights {
+                view_messages: false,
+                send_messages: false,
+                send_media: false,
+                send_stickers: false,
+                send_gifs: false,
+                send_games: false,
+                send_inline: false,
+                embed_links: false,
+                send_polls: false,
+                change_info: false,
+                invite_users: false,
+                pin_messages: false,
+                manage_topics: false,
+                send_photos: false,
+                send_videos: false,
+                send_roundvideos: false,
+                send_audios: false,
+                send_voices: false,
+                send_docs: false,
+                send_plain: false,
+                until_date: 0,
+            }),
+        })
+        .await;
 
     log::info!("Created team: {} (ID: {})", name, id);
     Ok(TeamInfo {
@@ -1953,6 +2026,7 @@ pub async fn cmd_get_team_messages(
     team_id: Option<i64>,
     limit: Option<i32>,
     before_message_id: Option<i32>,
+    media_filter: Option<String>,
     state: State<'_, TelegramState>,
 ) -> Result<MessagesResponse, String> {
     let client_opt = state.client.lock().await.clone();
@@ -2127,6 +2201,26 @@ pub async fn cmd_get_team_messages(
         };
 
         let date_str = msg.date().to_string();
+
+        // Apply media_filter if specified
+        if let Some(ref filter) = media_filter {
+            let filter_lower = filter.to_lowercase();
+            let matches = match filter_lower.as_str() {
+                "photo" => media_type == "photo",
+                "video" => media_type == "video",
+                "audio" => media_type == "audio" || media_type == "voice",
+                "voice" => media_type == "voice",
+                "document" => media_type == "document" || media_type == "file",
+                "file" => media_type == "file" || media_type == "document",
+                "media" => has_media,
+                "system" => message_type == "system",
+                "text" => message_type == "text",
+                _ => true,
+            };
+            if !matches {
+                continue;
+            }
+        }
 
         messages.push(ChatMessage {
             id: msg.id(),
@@ -2385,20 +2479,73 @@ pub async fn cmd_pin_team_message(
         team_id, message_id
     );
 
-    client
+    let pin_result = client
         .invoke(&tl::functions::messages::UpdatePinnedMessage {
             silent: false,
             unpin: false,
             pm_oneside: false,
-            peer: input_peer,
+            peer: input_peer.clone(),
             id: message_id,
         })
-        .await
-        .map_err(|e| {
-            let msg = format!("Failed to pin message: {}", e);
-            log::error!("[cmd_pin_team_message] ERROR: {}", msg);
-            msg
-        })?;
+        .await;
+
+    match pin_result {
+        Ok(_) => {}
+        Err(e) => {
+            let err_str = e.to_string();
+            if err_str.contains("CHAT_ADMIN_REQUIRED") || err_str.contains("RIGHTS") {
+                log::info!("[cmd_pin_team_message] Permission denied, trying to enable everyone-can-pin first...");
+                // Try to enable pinning for all members, then retry
+                let _ = client
+                    .invoke(&tl::functions::messages::EditChatDefaultBannedRights {
+                        peer: input_peer.clone(),
+                        banned_rights: tl::enums::ChatBannedRights::Rights(tl::types::ChatBannedRights {
+                            view_messages: false,
+                            send_messages: false,
+                            send_media: false,
+                            send_stickers: false,
+                            send_gifs: false,
+                            send_games: false,
+                            send_inline: false,
+                            embed_links: false,
+                            send_polls: false,
+                            change_info: false,
+                            invite_users: false,
+                            pin_messages: false,
+                            manage_topics: false,
+                            send_photos: false,
+                            send_videos: false,
+                            send_roundvideos: false,
+                            send_audios: false,
+                            send_voices: false,
+                            send_docs: false,
+                            send_plain: false,
+                            until_date: 0,
+                        }),
+                    })
+                    .await;
+
+                client
+                    .invoke(&tl::functions::messages::UpdatePinnedMessage {
+                        silent: false,
+                        unpin: false,
+                        pm_oneside: false,
+                        peer: input_peer.clone(),
+                        id: message_id,
+                    })
+                    .await
+                    .map_err(|e2| {
+                        let msg = format!("Failed to pin message: {}", e2);
+                        log::error!("[cmd_pin_team_message] ERROR: {}", msg);
+                        msg
+                    })?;
+            } else {
+                let msg = format!("Failed to pin message: {}", e);
+                log::error!("[cmd_pin_team_message] ERROR: {}", msg);
+                return Err(msg);
+            }
+        }
+    }
 
     log::info!("[cmd_pin_team_message] Success");
     Ok(true)
@@ -2885,20 +3032,72 @@ pub async fn cmd_unpin_team_message(
         team_id, message_id
     );
 
-    client
+    let unpin_result = client
         .invoke(&tl::functions::messages::UpdatePinnedMessage {
             silent: false,
             unpin: true,
             pm_oneside: false,
-            peer: input_peer,
+            peer: input_peer.clone(),
             id: message_id,
         })
-        .await
-        .map_err(|e| {
-            let msg = format!("Failed to unpin message: {}", e);
-            log::error!("[cmd_unpin_team_message] ERROR: {}", msg);
-            msg
-        })?;
+        .await;
+
+    match unpin_result {
+        Ok(_) => {}
+        Err(e) => {
+            let err_str = e.to_string();
+            if err_str.contains("CHAT_ADMIN_REQUIRED") || err_str.contains("RIGHTS") {
+                log::info!("[cmd_unpin_team_message] Permission denied, trying to enable everyone-can-pin first...");
+                let _ = client
+                    .invoke(&tl::functions::messages::EditChatDefaultBannedRights {
+                        peer: input_peer.clone(),
+                        banned_rights: tl::enums::ChatBannedRights::Rights(tl::types::ChatBannedRights {
+                            view_messages: false,
+                            send_messages: false,
+                            send_media: false,
+                            send_stickers: false,
+                            send_gifs: false,
+                            send_games: false,
+                            send_inline: false,
+                            embed_links: false,
+                            send_polls: false,
+                            change_info: false,
+                            invite_users: false,
+                            pin_messages: false,
+                            manage_topics: false,
+                            send_photos: false,
+                            send_videos: false,
+                            send_roundvideos: false,
+                            send_audios: false,
+                            send_voices: false,
+                            send_docs: false,
+                            send_plain: false,
+                            until_date: 0,
+                        }),
+                    })
+                    .await;
+
+                client
+                    .invoke(&tl::functions::messages::UpdatePinnedMessage {
+                        silent: false,
+                        unpin: true,
+                        pm_oneside: false,
+                        peer: input_peer.clone(),
+                        id: message_id,
+                    })
+                    .await
+                    .map_err(|e2| {
+                        let msg = format!("Failed to unpin message: {}", e2);
+                        log::error!("[cmd_unpin_team_message] ERROR: {}", msg);
+                        msg
+                    })?;
+            } else {
+                let msg = format!("Failed to unpin message: {}", e);
+                log::error!("[cmd_unpin_team_message] ERROR: {}", msg);
+                return Err(msg);
+            }
+        }
+    }
 
     log::info!("[cmd_unpin_team_message] Success");
     Ok(true)
