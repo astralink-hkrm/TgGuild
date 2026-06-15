@@ -298,19 +298,19 @@ pub async fn cmd_get_teams(
                         });
                     }
                     Peer::Group(g) => {
-                        let title = match &g.raw {
-                            tl::enums::Chat::Chat(c) => c.title.clone(),
-                            tl::enums::Chat::Channel(c) => c.title.clone(),
-                            _ => "Unknown Group".to_string(),
+                        let (title, username, member_count, is_supergroup) = match &g.raw {
+                            tl::enums::Chat::Chat(c) => (c.title.clone(), None, c.participants_count, false),
+                            tl::enums::Chat::Channel(c) => (c.title.clone(), c.username.clone(), c.participants_count.unwrap_or(0), c.megagroup),
+                            _ => ("Unknown Group".to_string(), None, 0, false),
                         };
                         state.peer_cache.write().await.insert(id, dialog.peer.clone());
                         teams.push(TeamInfo {
                             id,
                             name: title,
-                            username: None,
-                            member_count: 0,
+                            username,
+                            member_count,
                             is_channel: false,
-                            is_supergroup: false,
+                            is_supergroup,
                             top_members: Vec::new(),
                             unread_count: get_dialog_unread_count(&dialog.raw),
                             photo_url: if chat_has_photo(&g.raw) {
@@ -360,10 +360,10 @@ pub async fn cmd_get_teams(
                     });
                 }
                 Peer::Group(g) => {
-                    let title = match &g.raw {
-                        grammers_tl_types::enums::Chat::Chat(c) => c.title.clone(),
-                        grammers_tl_types::enums::Chat::Channel(c) => c.title.clone(),
-                        _ => "Unknown Group".to_string(),
+                    let (title, username, member_count, is_supergroup) = match &g.raw {
+                        grammers_tl_types::enums::Chat::Chat(c) => (c.title.clone(), None, c.participants_count, false),
+                        grammers_tl_types::enums::Chat::Channel(c) => (c.title.clone(), c.username.clone(), c.participants_count.unwrap_or(0), c.megagroup),
+                        _ => ("Unknown Group".to_string(), None, 0, false),
                     };
                     let id = g.raw.id();
                     state
@@ -375,10 +375,10 @@ pub async fn cmd_get_teams(
                     teams.push(TeamInfo {
                         id,
                         name: title,
-                        username: None,
-                        member_count: 0,
+                        username,
+                        member_count,
                         is_channel: false,
-                        is_supergroup: false,
+                        is_supergroup,
                         top_members: Vec::new(),
                         unread_count: get_dialog_unread_count(&dialog.raw),
                         photo_url: if chat_has_photo(&g.raw) {

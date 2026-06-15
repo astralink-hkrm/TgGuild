@@ -450,7 +450,7 @@ export function TeamsPanel({ onGroupCreated }: TeamsPanelProps) {
                             groupId={selectedTeam ? selectedTeam.id : Number(selectedContact!.user_id)}
                             groupName={selectedTeam ? selectedTeam.name : `${selectedContact!.first_name} ${selectedContact!.last_name || ''}`.trim()}
                             groupPhotoUrl={selectedTeam ? selectedTeam.photo_url : selectedContact!.photo_url}
-                            memberCount={selectedTeam?.member_count || members.length}
+                            memberCount={selectedTeam?.member_count ?? members.length}
                             canManageMembers={canManageMembers}
                             isDirect={selectedChat.type === 'direct'}
                             mentionableMembers={members}
