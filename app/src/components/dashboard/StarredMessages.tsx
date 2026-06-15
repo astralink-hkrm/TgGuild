@@ -16,16 +16,24 @@ interface StarredMessagesProps {
     open: boolean;
     onClose: () => void;
     onJumpToMessage: (chatId: number, messageId: number) => boolean;
+    chatId?: number;
+    chatName?: string;
 }
 
-export function StarredMessages({ open, onClose, onJumpToMessage }: StarredMessagesProps) {
-    const [messages, setMessages] = useState<StarredMessage[]>([]);
+export function StarredMessages({ open, onClose, onJumpToMessage, chatId, chatName }: StarredMessagesProps) {
+    const [allMessages, setAllMessages] = useState<StarredMessage[]>([]);
     const [loading, setLoading] = useState(false);
+
+    const messages = chatId
+        ? allMessages.filter(m => m.chat_id === chatId)
+        : allMessages;
+
+    const title = chatId && chatName ? `Starred in ${chatName}` : 'Starred Messages';
 
     const loadStarred = () => {
         setLoading(true);
         invoke<StarredMessage[]>('cmd_get_starred_messages')
-            .then(setMessages)
+            .then(setAllMessages)
             .catch(console.error)
             .finally(() => setLoading(false));
     };
@@ -64,7 +72,7 @@ export function StarredMessages({ open, onClose, onJumpToMessage }: StarredMessa
                 </button>
                 <div className="flex items-center gap-2">
                     <Star className="w-5 h-5 text-yellow-400 fill-yellow-400" />
-                    <h2 className="text-[15px] font-semibold text-telegram-text">Starred Messages</h2>
+                    <h2 className="text-[15px] font-semibold text-telegram-text">{title}</h2>
                 </div>
             </div>
 
@@ -91,7 +99,7 @@ export function StarredMessages({ open, onClose, onJumpToMessage }: StarredMessa
                                     <div className="flex-1 min-w-0">
                                         <div className="flex items-center gap-2">
                                             <MessageSquare className="w-3.5 h-3.5 text-telegram-subtext shrink-0" />
-                                            <span className="text-xs font-medium text-telegram-primary truncate">{msg.chat_name}</span>
+                                            {!chatId && <span className="text-xs font-medium text-telegram-primary truncate">{msg.chat_name}</span>}
                                             <span className="text-xs text-telegram-subtext shrink-0">{formatTime(msg.date)}</span>
                                         </div>
                                         {msg.sender_name && (

@@ -356,6 +356,11 @@ export function TeamChat({
             .catch(() => {});
     }, [groupId, displayMessages.length]);
 
+    // Close starred view when switching chats
+    useEffect(() => {
+        setShowStarredView(false);
+    }, [groupId]);
+
     // Check star status for messages
     useEffect(() => {
         if (!groupId || displayMessages.length === 0) return;
@@ -1491,6 +1496,8 @@ export function TeamChat({
                         }
                         return false;
                     }}
+                    chatId={groupId ?? undefined}
+                    chatName={groupName}
                 />
             ) : (
             <>
