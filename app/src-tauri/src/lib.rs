@@ -150,6 +150,7 @@ pub fn run() {
             commands::cmd_check_admin,
             commands::cmd_get_team_full_info,
             commands::cmd_get_team_invite_link,
+            commands::cmd_revoke_invite_link,
             commands::cmd_leave_team,
             commands::cmd_delete_direct_chat,
             commands::cmd_get_folder_tree,
