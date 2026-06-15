@@ -47,6 +47,8 @@ import { GroupInfoModal } from './GroupInfoModal';
 import { MemberListModal } from './MemberListModal';
 import { SharedMediaModal } from './SharedMediaModal';
 import { MessageActions } from './MessageActions';
+import { SystemMessage } from './SystemMessage';
+import { GroupMembersPanel } from './GroupMembersPanel';
 import { PinnedMessagesBar } from './PinnedMessagesBar';
 import { ForwardPickerModal } from './ForwardPickerModal';
 import { StarredMessages } from './StarredMessages';
@@ -71,6 +73,8 @@ interface ChatMessage {
     pending?: boolean;
     edited?: boolean;
     audio_duration?: number | null;
+    message_type?: string;
+    action_params?: string | null;
 }
 
 interface MessagesResponse {
@@ -118,6 +122,7 @@ interface TeamChatProps {
     canManageMembers?: boolean;
     isDirect?: boolean;
     mentionableMembers?: MentionableMember[];
+    currentUserId?: string;
     onManageMembers?: () => void;
     onOpenDirectChat?: (user: { user_id: number; first_name: string; photo_url?: string | null }) => void;
     members?: any[];
@@ -131,9 +136,10 @@ export function TeamChat({
     canManageMembers = false,
     isDirect = false,
     mentionableMembers = [],
+    currentUserId,
     onManageMembers,
     onOpenDirectChat,
-    members: propMembers = [],
+    members = [],
 }: TeamChatProps) {
     const [messages, setMessages] = useState<ChatMessage[]>([]);
     const [loading, setLoading] = useState(true);
@@ -154,6 +160,7 @@ export function TeamChat({
     const [streamToken, setStreamToken] = useState('');
     const [streamBaseUrl, setStreamBaseUrl] = useState('http://localhost:14201');
     const [showPlusMenu, setShowPlusMenu] = useState(false);
+    const [showGroupMembersPanel, setShowGroupMembersPanel] = useState(false);
     const [membersExpanded, setMembersExpanded] = useState(false);
     const [searchOpen, setSearchOpen] = useState(false);
     const [searchQuery, setSearchQuery] = useState('');
@@ -178,6 +185,12 @@ export function TeamChat({
     const [clearedUpTo, setClearedUpTo] = useState<Record<string, number>>(() => {
         try {
             const raw = window.localStorage.getItem('tgguild.clearedChats.v1');
+            return raw ? JSON.parse(raw) : {};
+        } catch { return {}; }
+    });
+    const [deletedMessageIds, setDeletedMessageIds] = useState<Record<string, number[]>>(() => {
+        try {
+            const raw = window.localStorage.getItem('tgguild.deletedMessages.v1');
             return raw ? JSON.parse(raw) : {};
         } catch { return {}; }
     });
@@ -210,10 +223,10 @@ export function TeamChat({
     const messagesEndRef = useRef<HTMLDivElement>(null);
 
     const sortedMembers = useMemo(() => {
-        return [...propMembers].sort((a, b) => 
+        return [...members].sort((a, b) => 
             (a.first_name || '').localeCompare(b.first_name || '')
         );
-    }, [propMembers]);
+    }, [members]);
 
     const displayedMembers = membersExpanded ? sortedMembers : sortedMembers.slice(0, 3);
     const hasMoreMembers = sortedMembers.length > 3;
@@ -236,9 +249,12 @@ export function TeamChat({
     const peerKey = groupId === null ? 'saved' : String(groupId);
     const displayMessages = useMemo(() => {
         const upTo = clearedUpTo[peerKey];
-        if (!upTo) return messages;
-        return messages.filter(msg => msg.id > upTo);
-    }, [messages, clearedUpTo, peerKey]);
+        const deletedIds = new Set(deletedMessageIds[peerKey] || []);
+        let filtered = messages;
+        if (upTo) filtered = filtered.filter(msg => msg.id > upTo);
+        if (deletedIds.size > 0) filtered = filtered.filter(msg => !deletedIds.has(msg.id));
+        return filtered;
+    }, [messages, clearedUpTo, deletedMessageIds, peerKey]);
 
     useEffect(() => {
         peerKeyRef.current = peerKey;
@@ -451,7 +467,7 @@ export function TeamChat({
     };
 
     const handleSend = async () => {
-        if ((!newMessage.trim() && !attachmentDraft) || sending || uploading) return;
+        if ((!newMessage.trim() && !editText.trim() && !attachmentDraft) || sending || uploading) return;
         try {
             setSending(true);
             if (attachmentDraft) {
@@ -604,16 +620,29 @@ export function TeamChat({
 
     const handleSelectionDelete = async (revoke: boolean) => {
         if (selectedMessageIds.size === 0) return;
+        const deletedIds = new Set(selectedMessageIds);
         try {
             await invoke('cmd_delete_messages', {
                 teamId: groupId,
-                messageIds: Array.from(selectedMessageIds),
+                messageIds: Array.from(deletedIds),
                 revoke,
             });
-            toast.success(`Deleted ${selectedMessageIds.size} message${selectedMessageIds.size > 1 ? 's' : ''}`);
+            // Persist deletion so messages stay hidden across reloads
+            setDeletedMessageIds((prev) => {
+                const existing = new Set(prev[peerKey] || []);
+                let changed = false;
+                for (const id of deletedIds) {
+                    if (!existing.has(id)) { existing.add(id); changed = true; }
+                }
+                if (!changed) return prev;
+                const next = { ...prev, [peerKey]: Array.from(existing) };
+                try { window.localStorage.setItem('tgguild.deletedMessages.v1', JSON.stringify(next)); } catch {}
+                return next;
+            });
+            setMessages((prev) => prev.filter((m) => !deletedIds.has(m.id)));
+            toast.success(`Deleted ${deletedIds.size} message${deletedIds.size > 1 ? 's' : ''}`);
             setShowSelectionDelete(false);
             setSelectedMessageIds(new Set());
-            loadMessages({ silent: true });
         } catch (e) {
             toast.error(`Failed to delete: ${e}`);
         }
@@ -861,6 +890,14 @@ export function TeamChat({
         setClearedUpTo(next);
         try { window.localStorage.setItem('tgguild.clearedChats.v1', JSON.stringify(next)); } catch {}
         setMessages([]);
+        // Also clear deleted message tracking for this chat
+        setDeletedMessageIds((prev) => {
+            if (!prev[peerKey]) return prev;
+            const next2 = { ...prev };
+            delete next2[peerKey];
+            try { window.localStorage.setItem('tgguild.deletedMessages.v1', JSON.stringify(next2)); } catch {}
+            return next2;
+        });
         try {
             window.localStorage.removeItem(`tgguild.telegramMessages.v1.${peerKey}`);
         } catch {}
@@ -921,15 +958,24 @@ export function TeamChat({
     const handleConfirmDelete = async () => {
         if (!showDeleteConfirm) return;
         const msg = showDeleteConfirm;
+        const deletedId = msg.id;
         setShowDeleteConfirm(null);
         try {
             await invoke('cmd_delete_messages', {
                 teamId: groupId,
-                messageIds: [msg.id],
+                messageIds: [deletedId],
                 revoke: deleteForEveryone,
             });
+            // Persist deletion so the message stays hidden across reloads
+            setDeletedMessageIds((prev) => {
+                const existing = prev[peerKey] || [];
+                if (existing.includes(deletedId)) return prev;
+                const next = { ...prev, [peerKey]: [...existing, deletedId] };
+                try { window.localStorage.setItem('tgguild.deletedMessages.v1', JSON.stringify(next)); } catch {}
+                return next;
+            });
+            setMessages((prev) => prev.filter((m) => m.id !== deletedId));
             toast.success('Message deleted');
-            loadMessages({ silent: true });
         } catch (e) {
             toast.error(`Failed to delete: ${e}`);
         }
@@ -1299,7 +1345,13 @@ export function TeamChat({
 
                     {!isDirect && (
                         <div className="flex items-center gap-3 ml-2 border-l border-telegram-border pl-4">
-                            <MemberStack members={sortedMembers} size="sm" />
+                            <button
+                                onClick={() => setShowGroupMembersPanel(true)}
+                                className="transition-transform hover:scale-105 active:scale-95"
+                                title="View all members"
+                            >
+                                <MemberStack members={sortedMembers} size="sm" />
+                            </button>
                             <div className="relative">
                                 <button
                                     onClick={() => setShowPlusMenu(!showPlusMenu)}
@@ -1420,6 +1472,7 @@ export function TeamChat({
                             const currentDateKey = dateKey(msg.date);
                             const previousDateKey = index > 0 ? dateKey(displayMessages[index - 1].date) : null;
                             const showDateSeparator = currentDateKey !== previousDateKey;
+                            const isSystem = msg.message_type === 'system';
                             return (
                                 <div key={msg.id} id={`msg-${msg.id}`}>
                                     {showDateSeparator && (
@@ -1429,6 +1482,16 @@ export function TeamChat({
                                             </span>
                                         </div>
                                     )}
+                                    {isSystem ? (
+                                        <SystemMessage
+                                            text={msg.text}
+                                            actionParams={msg.action_params}
+                                            onJumpToPinned={(pinnedId) => {
+                                                const el = document.getElementById(`msg-${pinnedId}`);
+                                                if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                                            }}
+                                        />
+                                    ) : (
                                     <div className={`group flex ${outgoing ? 'justify-end' : 'justify-start'}`}>
                                         <div className={`relative flex gap-2 max-w-[78%] ${outgoing ? 'flex-row-reverse' : ''}`}>
                                             {!outgoing && !isDirect && (
@@ -1599,6 +1662,7 @@ export function TeamChat({
                                             </div>
                                         </div>
                                     </div>
+                                    )}
                                 </div>
                             );
                         })}
@@ -1748,6 +1812,12 @@ export function TeamChat({
                                     e.preventDefault();
                                     realtime.sendTyping(false);
                                     handleSend();
+                                } else if (e.key === 'Escape') {
+                                    if (editingMessage) {
+                                        handleCancelEdit();
+                                    }
+                                    setShowEmojiPicker(false);
+                                    setShowPlusMenu(false);
                                 }
                             }}
                             placeholder={editingMessage ? 'Edit message...' : replyTo ? 'Reply...' : 'Message'}
@@ -1798,6 +1868,16 @@ export function TeamChat({
             </>
             )}
 
+            {showGroupMembersPanel && groupId && (
+                <GroupMembersPanel
+                    groupId={groupId}
+                    currentUserId={currentUserId}
+                    canManageMembers={canManageMembers}
+                    onClose={() => setShowGroupMembersPanel(false)}
+                    onOpenDirectChat={onOpenDirectChat}
+                    onMembersChanged={() => loadMessages({})}
+                />
+            )}
             {showMemberListModal && groupId && (
                 <MemberListModal groupId={groupId} onClose={() => setShowMemberListModal(false)} />
             )}

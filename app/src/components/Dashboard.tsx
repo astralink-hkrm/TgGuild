@@ -562,6 +562,7 @@ export function Dashboard({ onLogout }: { onLogout: () => void }) {
                             groupPhotoUrl={groups.find(g => g.id === activeGroupId)?.photo_url}
                             memberCount={groups.find(g => g.id === activeGroupId)?.member_count || activeMembers.length}
                             canManageMembers={canManageActiveGroup}
+                            currentUserId={currentUserId ?? undefined}
                             mentionableMembers={activeMembers}
                             members={activeMembers}
                             onManageMembers={() => setShowAddSubscriber(true)}

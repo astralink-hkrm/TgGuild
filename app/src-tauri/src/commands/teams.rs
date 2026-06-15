@@ -1,6 +1,7 @@
 use crate::commands::utils::{map_error, resolve_peer, resolve_input_peer};
 use crate::TelegramState;
 use grammers_client::types::Peer;
+use grammers_client::InputMessage;
 use grammers_tl_types as tl;
 use std::collections::{HashMap, HashSet};
 use tauri::State;
@@ -36,6 +37,8 @@ pub struct TeamMember {
     pub invite_restriction: Option<String>,
     #[serde(serialize_with = "serialize_opt_i64_to_string")]
     pub access_hash: Option<i64>,
+    pub joined_date: Option<String>,
+    pub online_status: Option<String>,
 }
 
 #[derive(Clone, serde::Serialize)]
@@ -177,6 +180,8 @@ pub struct ChatMessage {
     pub pinned: bool,
     pub edited: bool,
     pub audio_duration: Option<f64>,
+    pub message_type: String,
+    pub action_params: Option<String>,
 }
 
 fn user_has_photo(user: &tl::enums::User) -> bool {
@@ -657,10 +662,32 @@ pub async fn cmd_get_team_members(
 
     let mut members = Vec::new();
     let mut participants = client.iter_participants(&peer);
-    
+
     loop {
         match participants.next().await {
             Ok(Some(p)) => {
+                let joined_date = match &p.role {
+                    grammers_client::types::Role::User(n) => Some(n.date().format("%Y-%m-%d").to_string()),
+                    grammers_client::types::Role::Admin(a) => Some(a.date().format("%Y-%m-%d").to_string()),
+                    grammers_client::types::Role::Banned(b) => Some(b.date().format("%Y-%m-%d").to_string()),
+                    _ => None,
+                };
+                let online_status = match &p.user.raw {
+                    tl::enums::User::User(ref u) => match &u.status {
+                        Some(tl::enums::UserStatus::Online(_)) => Some("online".to_string()),
+                        Some(tl::enums::UserStatus::Offline(off)) => {
+                            let last = chrono::DateTime::from_timestamp(off.was_online as i64, 0)
+                                .map(|d| format!("last seen {}", d.format("%Y-%m-%d %H:%M")))
+                                .unwrap_or_else(|| "offline".to_string());
+                            Some(last)
+                        }
+                        Some(tl::enums::UserStatus::Recently(_)) => Some("last seen recently".to_string()),
+                        Some(tl::enums::UserStatus::LastWeek(_)) => Some("last seen this week".to_string()),
+                        Some(tl::enums::UserStatus::LastMonth(_)) => Some("last seen this month".to_string()),
+                        _ => Some("offline".to_string()),
+                    },
+                    _ => None,
+                };
                 members.push(TeamMember {
                     user_id: p.user.raw.id(),
                     first_name: p.user.first_name().unwrap_or("Unknown").to_string(),
@@ -692,6 +719,8 @@ pub async fn cmd_get_team_members(
                     },
                     invite_eligible: true,
                     invite_restriction: None,
+                    joined_date,
+                    online_status,
                 });
             }
             Ok(None) => break,
@@ -765,6 +794,8 @@ pub async fn cmd_search_users(
                     Some("Telegram only allows direct invites for mutual contacts. Share an invite link with this person instead.".to_string())
                 },
                 access_hash: u.access_hash,
+                joined_date: None,
+                online_status: None,
             });
             state.peer_cache.write().await.insert(
                 u.id,
@@ -879,16 +910,14 @@ pub async fn cmd_get_contacts(state: State<'_, TelegramState>) -> Result<Vec<Tea
                             Some("Telegram only allows direct invites for mutual contacts. Share an invite link with this person instead.".to_string())
                         },
                         access_hash: u.access_hash,
+                        joined_date: None,
+                        online_status: None,
                     });
-                    state.peer_cache.write().await.insert(
-                        u.id,
-                        Peer::User(grammers_client::types::User::from_raw(u_raw)),
-                    );
                 }
             }
         }
-        tl::enums::contacts::Contacts::NotModified => {
-            log::info!("Contacts not modified since last fetch");
+        _ => {
+            log::info!("Contacts not modified");
         }
     }
 
@@ -1411,15 +1440,107 @@ pub async fn cmd_remove_team_member(
 
 #[tauri::command]
 pub async fn cmd_set_member_role(
-    _team_id: i64,
-    _user_id: i64,
+    team_id: i64,
+    user_id_str: String,
+    access_hash_str: Option<String>,
     role: String,
-    _state: State<'_, TelegramState>,
+    state: State<'_, TelegramState>,
 ) -> Result<bool, String> {
-    Err(format!(
-        "Role management not implemented. Requested role: {}",
-        role
-    ))
+    let client_opt = state.client.lock().await.clone();
+    if client_opt.is_none() {
+        return Ok(false);
+    }
+    let client = client_opt.unwrap();
+
+    let user_id = user_id_str
+        .parse::<i64>()
+        .map_err(|_| "Invalid user ID format".to_string())?;
+    let access_hash = access_hash_str
+        .and_then(|s| s.parse::<i64>().ok())
+        .unwrap_or(0);
+
+    log::info!("Setting role '{}' for user {} in team {}", role, user_id, team_id);
+
+    let peer = resolve_peer(&client, Some(team_id), &state.peer_cache).await?;
+    let input_user = tl::enums::InputUser::User(tl::types::InputUser {
+        user_id,
+        access_hash,
+    });
+
+    let is_promote = role == "admin";
+
+    match &peer {
+        Peer::Channel(c) => {
+            let input_channel = tl::enums::InputChannel::Channel(tl::types::InputChannel {
+                channel_id: c.raw.id,
+                access_hash: c.raw.access_hash.ok_or("No access hash")?,
+            });
+
+            let admin_rights = if is_promote {
+                tl::enums::ChatAdminRights::Rights(tl::types::ChatAdminRights {
+                    change_info: true,
+                    post_messages: true,
+                    edit_messages: true,
+                    delete_messages: true,
+                    ban_users: true,
+                    invite_users: true,
+                    pin_messages: true,
+                    add_admins: false,
+                    anonymous: false,
+                    manage_call: true,
+                    other: true,
+                    manage_topics: true,
+                    post_stories: true,
+                    edit_stories: true,
+                    delete_stories: true,
+                    manage_direct_messages: true,
+                })
+            } else {
+                tl::enums::ChatAdminRights::Rights(tl::types::ChatAdminRights {
+                    change_info: false,
+                    post_messages: false,
+                    edit_messages: false,
+                    delete_messages: false,
+                    ban_users: false,
+                    invite_users: false,
+                    pin_messages: false,
+                    add_admins: false,
+                    anonymous: false,
+                    manage_call: false,
+                    other: false,
+                    manage_topics: false,
+                    post_stories: false,
+                    edit_stories: false,
+                    delete_stories: false,
+                    manage_direct_messages: false,
+                })
+            };
+
+            client
+                .invoke(&tl::functions::channels::EditAdmin {
+                    channel: input_channel,
+                    user_id: input_user,
+                    admin_rights,
+                    rank: if is_promote { "admin".to_string() } else { "".to_string() },
+                })
+                .await
+                .map_err(|e| format!("Failed to set role: {}", e))?;
+        }
+        Peer::Group(g) => {
+            client
+                .invoke(&tl::functions::messages::EditChatAdmin {
+                    chat_id: g.raw.id(),
+                    user_id: input_user,
+                    is_admin: is_promote,
+                })
+                .await
+                .map_err(|e| format!("Failed to set role: {}", e))?;
+        }
+        _ => return Err("Invalid peer type".to_string()),
+    }
+
+    log::info!("Successfully set role '{}' for user {} in team {}", role, user_id, team_id);
+    Ok(true)
 }
 
 #[tauri::command]
@@ -1709,92 +1830,113 @@ pub async fn cmd_get_team_messages(
 
         let media = msg.media();
         let text = msg.text().to_string();
+        let mut message_type = "text".to_string();
+        let mut action_params: Option<String> = None;
 
-        let (has_media, media_type, media_name, media_size, mime_type, display_text, audio_duration) = match media {
-            Some(grammers_client::types::Media::Photo(_)) => {
-                let display = if !text.is_empty() {
-                    text
-                } else {
-                    "[Photo]".to_string()
-                };
-                (
-                    true,
-                    "photo".to_string(),
-                    "Photo".to_string(),
-                    0,
-                    "image/jpeg".to_string(),
-                    display,
-                    None,
-                )
-            }
-            Some(grammers_client::types::Media::Document(d)) => {
-                let name = d.name();
-                let size = d.size() as i64;
-                let mime = d.mime_type().map(|m| m.to_string()).unwrap_or_default();
-                let ext = std::path::Path::new(&name)
-                    .extension()
-                    .and_then(|e| e.to_str())
-                    .map(|s| s.to_lowercase())
-                    .unwrap_or_default();
-
-                // Check if document is a Telegram voice message or our own voice recording
-                let is_voice = d.raw.voice
-                    || (name.starts_with("voice-") && ext == "webm");
-
-                // Extract duration from document attributes
-                let duration = match &d.raw.document {
-                    Some(tl::enums::Document::Document(doc)) => {
-                        doc.attributes.iter().find_map(|attr| {
-                            match attr {
-                                tl::enums::DocumentAttribute::Audio(a) => Some(a.duration as f64),
+        // Detect system/action messages
+        let (has_media, media_type, media_name, media_size, mime_type, display_text, audio_duration) = match &msg.raw {
+            tl::enums::Message::Service(service) => {
+                let sender_name = sender_name.clone();
+                let (system_text, params) = match &service.action {
+                    tl::enums::MessageAction::PinMessage => {
+                        let pinned_id = service.reply_to.as_ref()
+                            .and_then(|r| match r {
+                                tl::enums::MessageReplyHeader::Header(h) => h.reply_to_msg_id,
                                 _ => None,
-                            }
-                        })
+                            })
+                            .unwrap_or(0);
+                        (format!("📌 {} pinned a message", sender_name), Some(pinned_id.to_string()))
                     }
-                    _ => None,
+                    tl::enums::MessageAction::ChatAddUser(action) => {
+                        let users_str = action.users.iter()
+                            .map(|uid| uid.to_string())
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        (format!("👋 {} joined the group", users_str), None)
+                    }
+                    tl::enums::MessageAction::ChatJoinedByLink(_action) => {
+                        (format!("👋 {} joined the group via invite link", sender_name), None)
+                    }
+                    tl::enums::MessageAction::ChatDeleteUser(action) => {
+                        (format!("👋 {} left the group", action.user_id), None)
+                    }
+                    tl::enums::MessageAction::ChatCreate(action) => {
+                        (format!("Group created: {}", action.title), None)
+                    }
+                    tl::enums::MessageAction::ChatEditTitle(action) => {
+                        (format!("Group name changed to \"{}\"", action.title), None)
+                    }
+                    tl::enums::MessageAction::ChatEditPhoto(_) => {
+                        (format!("{} changed the group photo", sender_name), None)
+                    }
+                    tl::enums::MessageAction::ChatDeletePhoto => {
+                        (format!("{} removed the group photo", sender_name), None)
+                    }
+                    tl::enums::MessageAction::ChannelCreate(action) => {
+                        (format!("Channel created: {}", action.title), None)
+                    }
+                    tl::enums::MessageAction::HistoryClear => {
+                        ("History cleared".to_string(), None)
+                    }
+                    _ => {
+                        // Unknown action type
+                        ("System event".to_string(), None)
+                    }
                 };
-
-                let file_type = if is_voice {
-                    "voice"
-                } else if ["jpg", "jpeg", "png", "gif", "webp", "bmp", "svg"]
-                    .contains(&ext.as_str())
-                {
-                    "image"
-                } else if ["mp4", "avi", "mov", "mkv", "webm"].contains(&ext.as_str()) {
-                    "video"
-                } else if ["mp3", "wav", "ogg", "flac", "aac", "m4a"].contains(&ext.as_str()) {
-                    "audio"
-                } else if ["pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "txt"]
-                    .contains(&ext.as_str())
-                {
-                    "document"
-                } else {
-                    "file"
-                }
-                .to_string();
-
-                let display = if !text.is_empty() {
-                    text
-                } else {
-                    name.to_string()
-                };
-                (true, file_type, name.to_string(), size, mime, display, duration)
+                message_type = "system".to_string();
+                action_params = params;
+                (false, "none".to_string(), "".to_string(), 0, "".to_string(), system_text, None)
             }
             _ => {
-                let display = if !text.is_empty() {
-                    text
-                } else {
-                    "[No text]".to_string()
-                };
-                (
-                    false,
-                    "none".to_string(),
-                    "".to_string(),
-                    0,
-                    "".to_string(),
-                    display,
-                    None,
-                )
+                match media {
+                    Some(grammers_client::types::Media::Photo(_)) => {
+                        let display = if !text.is_empty() { text } else { "[Photo]".to_string() };
+                        (true, "photo".to_string(), "Photo".to_string(), 0, "image/jpeg".to_string(), display, None)
+                    }
+                    Some(grammers_client::types::Media::Document(d)) => {
+                        let name = d.name();
+                        let size = d.size() as i64;
+                        let mime = d.mime_type().map(|m| m.to_string()).unwrap_or_default();
+                        let ext = std::path::Path::new(&name)
+                            .extension()
+                            .and_then(|e| e.to_str())
+                            .map(|s| s.to_lowercase())
+                            .unwrap_or_default();
+
+                        let is_voice = d.raw.voice || (name.starts_with("voice-") && ext == "webm");
+
+                        let duration = match &d.raw.document {
+                            Some(tl::enums::Document::Document(doc)) => {
+                                doc.attributes.iter().find_map(|attr| match attr {
+                                    tl::enums::DocumentAttribute::Audio(a) => Some(a.duration as f64),
+                                    _ => None,
+                                })
+                            }
+                            _ => None,
+                        };
+
+                        let file_type = if is_voice {
+                            "voice"
+                        } else if ["jpg", "jpeg", "png", "gif", "webp", "bmp", "svg"].contains(&ext.as_str()) {
+                            "image"
+                        } else if ["mp4", "avi", "mov", "mkv", "webm"].contains(&ext.as_str()) {
+                            "video"
+                        } else if ["mp3", "wav", "ogg", "flac", "aac", "m4a"].contains(&ext.as_str()) {
+                            "audio"
+                        } else if ["pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "txt"].contains(&ext.as_str()) {
+                            "document"
+                        } else {
+                            "file"
+                        }.to_string();
+
+                        let display = if !text.is_empty() { text } else { name.to_string() };
+                        (true, file_type, name.to_string(), size, mime, display, duration)
+                    }
+                    _ => {
+                        let display = if !text.is_empty() { text } else { String::new() };
+                        (false, "none".to_string(), "".to_string(), 0, "".to_string(), display, None)
+                    }
+                }
             }
         };
 
@@ -1816,6 +1958,8 @@ pub async fn cmd_get_team_messages(
             pinned: msg.pinned(),
             edited: msg.edit_date().is_some(),
             audio_duration,
+            message_type,
+            action_params,
         });
     }
 
@@ -1919,23 +2063,23 @@ pub async fn cmd_edit_message(
     let peer = resolve_peer(&client, team_id, &state.peer_cache).await?;
     let input_peer = peer_to_input_peer(&peer)?;
 
-    client
-        .invoke(&tl::functions::messages::EditMessage {
-            no_webpage: true,
-            peer: input_peer,
-            id: message_id,
-            message: Some(text),
-            media: None,
-            reply_markup: None,
-            entities: None,
-            schedule_date: None,
-            invert_media: false,
-            quick_reply_shortcut_id: None,
-            schedule_repeat_period: None,
-        })
-        .await
-        .map_err(|e| format!("Failed to edit message: {}", e))?;
+    log::info!(
+        "[cmd_edit_message] team_id={:?} message_id={} text_len={}",
+        team_id,
+        message_id,
+        text.len()
+    );
 
+    client
+        .edit_message(input_peer, message_id, InputMessage::new().text(text))
+        .await
+        .map_err(|e| {
+            let msg = format!("Failed to edit message: {}", e);
+            log::error!("[cmd_edit_message] ERROR: {}", msg);
+            msg
+        })?;
+
+    log::info!("[cmd_edit_message] Success");
     Ok(true)
 }
 
@@ -1951,31 +2095,25 @@ pub async fn cmd_delete_messages(
         return Ok(false);
     }
     let client = client_opt.unwrap();
-    let peer = resolve_peer(&client, team_id, &state.peer_cache).await?;
-    let input_peer = peer_to_input_peer(&peer)?;
+    let _peer = resolve_peer(&client, team_id, &state.peer_cache).await?;
 
-    if revoke {
-        client
-            .invoke(&tl::functions::messages::DeleteMessages {
-                id: message_ids,
-                revoke: true,
-            })
-            .await
-            .map_err(|e| format!("Failed to delete messages: {}", e))?;
-    } else {
-        client
-            .invoke(&tl::functions::messages::DeleteHistory {
-                peer: input_peer,
-                max_id: message_ids.into_iter().max().unwrap_or(0),
-                max_date: Some(0),
-                min_date: Some(0),
-                just_clear: true,
-                revoke: false,
-            })
-            .await
-            .map_err(|e| format!("Failed to delete messages: {}", e))?;
-    }
+    let label = if revoke { "Delete for everyone" } else { "Delete for me" };
+    let msg_count = message_ids.len();
+    println!("[cmd_delete_messages] {}: {} msgs", label, msg_count);
 
+    client
+        .invoke(&tl::functions::messages::DeleteMessages {
+            id: message_ids,
+            revoke,
+        })
+        .await
+        .map_err(|e| {
+            let msg = format!("Failed to {}: {}", label.to_lowercase(), e);
+            eprintln!("[cmd_delete_messages] ERROR: {}", msg);
+            msg
+        })?;
+
+    println!("[cmd_delete_messages] Success: {} msgs {}", label, msg_count);
     Ok(true)
 }
 
@@ -2054,12 +2192,29 @@ pub async fn cmd_pin_team_message(
     }
     let client = client_opt.unwrap();
     let peer = resolve_peer(&client, team_id, &state.peer_cache).await?;
+    let input_peer = resolve_input_peer(&peer)?;
+
+    log::info!(
+        "[cmd_pin_team_message] team_id={:?} message_id={}",
+        team_id, message_id
+    );
 
     client
-        .pin_message(&peer, message_id)
+        .invoke(&tl::functions::messages::UpdatePinnedMessage {
+            silent: false,
+            unpin: false,
+            pm_oneside: false,
+            peer: input_peer,
+            id: message_id,
+        })
         .await
-        .map_err(|e| format!("Failed to pin message: {}", e))?;
+        .map_err(|e| {
+            let msg = format!("Failed to pin message: {}", e);
+            log::error!("[cmd_pin_team_message] ERROR: {}", msg);
+            msg
+        })?;
 
+    log::info!("[cmd_pin_team_message] Success");
     Ok(true)
 }
 
@@ -2519,7 +2674,7 @@ pub struct StarredMessage {
     pub chat_id: i64,
     pub message_id: i32,
     pub chat_name: String,
-    pub text_preview: String,
+    pub text: String,
     pub sender_name: String,
     pub date: String,
     pub starred_at: String,
@@ -2539,6 +2694,11 @@ pub async fn cmd_unpin_team_message(
     let peer = resolve_peer(&client, team_id, &state.peer_cache).await?;
     let input_peer = resolve_input_peer(&peer)?;
 
+    log::info!(
+        "[cmd_unpin_team_message] team_id={:?} message_id={}",
+        team_id, message_id
+    );
+
     client
         .invoke(&tl::functions::messages::UpdatePinnedMessage {
             silent: false,
@@ -2548,8 +2708,13 @@ pub async fn cmd_unpin_team_message(
             id: message_id,
         })
         .await
-        .map_err(|e| format!("Failed to unpin message: {}", e))?;
+        .map_err(|e| {
+            let msg = format!("Failed to unpin message: {}", e);
+            log::error!("[cmd_unpin_team_message] ERROR: {}", msg);
+            msg
+        })?;
 
+    log::info!("[cmd_unpin_team_message] Success");
     Ok(true)
 }
 
@@ -2662,9 +2827,10 @@ pub async fn cmd_get_forward_targets(
 
 #[tauri::command]
 pub async fn cmd_forward_messages(
-    from_team_id: Option<i64>,
+    from_chat_id: Option<i64>,
     message_ids: Vec<i32>,
-    to_team_id: i64,
+    to_chat_ids: Vec<i64>,
+    send_copy: bool,
     state: State<'_, TelegramState>,
 ) -> Result<bool, String> {
     let client_opt = state.client.lock().await.clone();
@@ -2673,38 +2839,48 @@ pub async fn cmd_forward_messages(
     }
     let client = client_opt.unwrap();
 
-    let from_peer = resolve_peer(&client, from_team_id, &state.peer_cache).await?;
+    let from_peer = resolve_peer(&client, from_chat_id, &state.peer_cache).await?;
     let from_input_peer = resolve_input_peer(&from_peer)?;
-    let to_peer = resolve_peer(&client, Some(to_team_id), &state.peer_cache).await?;
-    let to_input_peer = resolve_input_peer(&to_peer)?;
 
-    let random_ids: Vec<i64> = message_ids.iter().map(|_| rand::random::<i64>()).collect();
+    log::info!(
+        "[cmd_forward_messages] from={:?} msgs={} targets={} send_copy={}",
+        from_chat_id, message_ids.len(), to_chat_ids.len(), send_copy
+    );
 
-    client
-        .invoke(&tl::functions::messages::ForwardMessages {
-            silent: false,
-            background: false,
-            with_my_score: false,
-            drop_author: false,
-            drop_media_captions: false,
-            noforwards: false,
-            allow_paid_floodskip: false,
-            from_peer: from_input_peer,
-            id: message_ids,
-            random_id: random_ids,
-            to_peer: to_input_peer,
-            top_msg_id: None,
-            reply_to: None,
-            schedule_date: None,
-            schedule_repeat_period: None,
-            send_as: None,
-            quick_reply_shortcut: None,
-            video_timestamp: None,
-            allow_paid_stars: None,
-            suggested_post: None,
-        })
-        .await
-        .map_err(|e| format!("Failed to forward messages: {}", e))?;
+    for &to_id in &to_chat_ids {
+        let to_peer = resolve_peer(&client, Some(to_id), &state.peer_cache).await?;
+        let to_input_peer = resolve_input_peer(&to_peer)?;
+
+        let random_ids: Vec<i64> = message_ids.iter().map(|_| rand::random::<i64>()).collect();
+
+        client
+            .invoke(&tl::functions::messages::ForwardMessages {
+                silent: false,
+                background: false,
+                with_my_score: false,
+                drop_author: false,
+                drop_media_captions: !send_copy,
+                noforwards: false,
+                allow_paid_floodskip: false,
+                from_peer: from_input_peer.clone(),
+                id: message_ids.clone(),
+                random_id: random_ids,
+                to_peer: to_input_peer,
+                top_msg_id: None,
+                reply_to: None,
+                schedule_date: None,
+                schedule_repeat_period: None,
+                send_as: None,
+                quick_reply_shortcut: None,
+                video_timestamp: None,
+                allow_paid_stars: None,
+                suggested_post: None,
+            })
+            .await
+            .map_err(|e| format!("Failed to forward to chat {}: {}", to_id, e))?;
+
+        log::info!("[cmd_forward_messages] Forwarded to {} successfully", to_id);
+    }
 
     Ok(true)
 }
@@ -2738,10 +2914,6 @@ fn save_starred(path: &std::path::Path, starred: &[StarredMessage]) {
 pub async fn cmd_star_message(
     chat_id: i64,
     message_id: i32,
-    chat_name: String,
-    text_preview: String,
-    sender_name: String,
-    date: String,
     app_handle: tauri::AppHandle,
 ) -> Result<bool, String> {
     let path = star_file_path(&app_handle);
@@ -2754,16 +2926,17 @@ pub async fn cmd_star_message(
         starred.push(StarredMessage {
             chat_id,
             message_id,
-            chat_name,
-            text_preview,
-            sender_name,
-            date,
+            chat_name: String::new(),
+            text: String::new(),
+            sender_name: String::new(),
+            date: String::new(),
             starred_at: chrono::Utc::now()
                 .format("%Y-%m-%d %H:%M:%S")
                 .to_string(),
         });
         save_starred(&path, &starred);
     }
+    log::info!("[cmd_star_message] chat_id={} message_id={}", chat_id, message_id);
     Ok(true)
 }
 
