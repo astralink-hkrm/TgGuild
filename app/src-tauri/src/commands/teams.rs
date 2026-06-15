@@ -3299,6 +3299,10 @@ fn save_starred(path: &std::path::Path, starred: &[StarredMessage]) {
 pub async fn cmd_star_message(
     chat_id: i64,
     message_id: i32,
+    text: Option<String>,
+    sender_name: Option<String>,
+    date: Option<String>,
+    chat_name: Option<String>,
     app_handle: tauri::AppHandle,
 ) -> Result<bool, String> {
     let path = star_file_path(&app_handle);
@@ -3311,10 +3315,10 @@ pub async fn cmd_star_message(
         starred.push(StarredMessage {
             chat_id,
             message_id,
-            chat_name: String::new(),
-            text: String::new(),
-            sender_name: String::new(),
-            date: String::new(),
+            chat_name: chat_name.unwrap_or_default(),
+            text: text.unwrap_or_default(),
+            sender_name: sender_name.unwrap_or_default(),
+            date: date.unwrap_or_default(),
             starred_at: chrono::Utc::now()
                 .format("%Y-%m-%d %H:%M:%S")
                 .to_string(),

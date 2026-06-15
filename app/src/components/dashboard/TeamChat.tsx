@@ -181,6 +181,8 @@ export function TeamChat({
     const [showThreeDotMenu, setShowThreeDotMenu] = useState(false);
     const [showMemberListModal, setShowMemberListModal] = useState(false);
     const [showGroupInfoModal, setShowGroupInfoModal] = useState(false);
+    const [showGroupRenameModal, setShowGroupRenameModal] = useState(false);
+    const [renameGroupValue, setRenameGroupValue] = useState('');
     const [showSharedMediaModal, setShowSharedMediaModal] = useState(false);
     const [sharedMediaTab, setSharedMediaTab] = useState<'all' | 'media'>('all');
     const [showClearConfirm, setShowClearConfirm] = useState(false);
@@ -570,14 +572,21 @@ export function TeamChat({
         }
     };
 
-    const handleStarToggle = async (messageId: number) => {
-        const key = `${groupId}-${messageId}`;
+    const handleStarToggle = async (msg: ChatMessage) => {
+        const key = `${groupId}-${msg.id}`;
         const currentlyStarred = starStatus[key] || false;
         try {
             if (currentlyStarred) {
-                await invoke('cmd_unstar_message', { chatId: groupId, messageId });
+                await invoke('cmd_unstar_message', { chatId: groupId, messageId: msg.id });
             } else {
-                await invoke('cmd_star_message', { chatId: groupId, messageId });
+                await invoke('cmd_star_message', {
+                    chatId: groupId,
+                    messageId: msg.id,
+                    text: msg.text,
+                    senderName: msg.sender_name,
+                    date: msg.date,
+                    chatName: groupName,
+                });
             }
             setStarStatus(prev => ({ ...prev, [key]: !currentlyStarred }));
             toast.success(currentlyStarred ? 'Removed star' : 'Message starred');
@@ -655,8 +664,16 @@ export function TeamChat({
         for (const id of selectedMessageIds) {
             const key = `${groupId}-${id}`;
             if (!starStatus[key]) {
+                const msg = displayMessages.find(m => m.id === id);
                 try {
-                    await invoke('cmd_star_message', { chatId: groupId, messageId: id });
+                    await invoke('cmd_star_message', {
+                        chatId: groupId,
+                        messageId: id,
+                        text: msg?.text ?? '',
+                        senderName: msg?.sender_name ?? '',
+                        date: msg?.date ?? '',
+                        chatName: groupName,
+                    });
                     setStarStatus(prev => ({ ...prev, [key]: true }));
                 } catch {}
             }
@@ -994,6 +1011,17 @@ export function TeamChat({
             window.location.reload();
         } catch (e) {
             toast.error(`Failed to delete chat: ${e}`);
+        }
+    };
+
+    const handleGroupRename = async () => {
+        if (!groupId || !renameGroupValue.trim()) return;
+        try {
+            await invoke('cmd_edit_team', { teamId: groupId, newName: renameGroupValue.trim(), newDescription: null });
+            toast.success('Group name updated');
+            setShowGroupRenameModal(false);
+        } catch (e) {
+            toast.error(`Failed to rename group: ${e}`);
         }
     };
 
@@ -1346,12 +1374,8 @@ export function TeamChat({
                                             <button
                                                 onClick={() => {
                                                     setShowThreeDotMenu(false);
-                                                    const name = window.prompt('Enter new group name:', groupName);
-                                                    if (name && name.trim()) {
-                                                        invoke('cmd_edit_team', { teamId: groupId, newName: name.trim(), newDescription: null })
-                                                            .then(() => toast.success('Group name updated'))
-                                                            .catch((e) => toast.error(`Failed: ${e}`));
-                                                    }
+                                                    setRenameGroupValue(groupName);
+                                                    setShowGroupRenameModal(true);
                                                 }}
                                                 className="w-full flex items-center gap-3 px-3 py-2.5 text-sm text-telegram-text hover:bg-telegram-hover transition-colors"
                                             >
@@ -1359,6 +1383,13 @@ export function TeamChat({
                                                 Rename Group
                                             </button>
                                         )}
+                                        <button
+                                            onClick={() => { setShowThreeDotMenu(false); setShowStarredView(true); }}
+                                            className="w-full flex items-center gap-3 px-3 py-2.5 text-sm text-telegram-text hover:bg-telegram-hover transition-colors"
+                                        >
+                                            <Star className="w-4 h-4 text-telegram-subtext" />
+                                            Starred Messages
+                                        </button>
                                         <div className="h-px bg-telegram-border my-1" />
                                         <button
                                             onClick={handleClearChat}
@@ -1557,7 +1588,7 @@ export function TeamChat({
                                                 onReact={() => setReactionPickerFor(reactionPickerFor === msg.id ? null : msg.id)}
                                                 onPin={() => handlePin(msg.id)}
                                                 isPinned={pinnedMessages.some(p => p.message_id === msg.id)}
-                                                onStar={() => handleStarToggle(msg.id)}
+                                                onStar={() => handleStarToggle(msg)}
                                                 isStarred={starStatus[`${groupId}-${msg.id}`] || false}
                                                 onForward={() => handleForwardSingle(msg.id)}
                                                 isSelected={selectedMessageIds.has(msg.id)}
@@ -1932,6 +1963,58 @@ export function TeamChat({
                     onOpenDirectChat={onOpenDirectChat}
                     isDirect={isDirect}
                 />
+            )}
+            {showGroupRenameModal && (
+                <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 backdrop-blur-sm" onClick={() => setShowGroupRenameModal(false)}>
+                    <div className="w-96 rounded-2xl bg-telegram-surface border border-telegram-border shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-100" onClick={e => e.stopPropagation()}>
+                        <div className="px-6 py-4 flex items-center justify-between border-b border-telegram-border">
+                            <div className="flex items-center gap-3">
+                                <div className="w-10 h-10 rounded-full bg-telegram-primary/10 flex items-center justify-center">
+                                    <Pencil className="w-5 h-5 text-telegram-primary" />
+                                </div>
+                                <div>
+                                    <h3 className="text-base font-semibold text-telegram-text">Rename Group</h3>
+                                    <p className="text-xs text-telegram-subtext">Change the group name</p>
+                                </div>
+                            </div>
+                            <button onClick={() => setShowGroupRenameModal(false)} className="p-1.5 rounded-full text-telegram-subtext hover:bg-telegram-hover hover:text-telegram-text transition-colors">
+                                <X className="w-5 h-5" />
+                            </button>
+                        </div>
+                        <div className="p-6">
+                            <label className="block text-xs font-semibold text-telegram-subtext uppercase tracking-wider mb-2">Group Name</label>
+                            <div className="relative">
+                                <input
+                                    autoFocus
+                                    type="text"
+                                    value={renameGroupValue}
+                                    onChange={e => setRenameGroupValue(e.target.value)}
+                                    onKeyDown={e => {
+                                        if (e.key === 'Enter' && renameGroupValue.trim()) handleGroupRename();
+                                        if (e.key === 'Escape') setShowGroupRenameModal(false);
+                                    }}
+                                    className="w-full bg-telegram-hover border border-telegram-border focus:border-telegram-primary rounded-xl px-4 py-3 text-sm text-telegram-text placeholder-telegram-subtext/50 focus:outline-none focus:ring-2 focus:ring-telegram-primary/20 transition-all"
+                                    placeholder="Enter group name"
+                                />
+                            </div>
+                            <div className="flex gap-3 mt-6">
+                                <button
+                                    onClick={() => setShowGroupRenameModal(false)}
+                                    className="flex-1 px-4 py-2.5 text-sm font-semibold text-telegram-text bg-telegram-hover hover:bg-telegram-border rounded-xl transition-colors"
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    onClick={handleGroupRename}
+                                    disabled={!renameGroupValue.trim() || renameGroupValue.trim() === groupName}
+                                    className="flex-1 px-4 py-2.5 text-sm font-semibold text-white bg-telegram-primary hover:bg-telegram-primary/90 disabled:opacity-40 disabled:cursor-not-allowed rounded-xl shadow-lg shadow-telegram-primary/20 transition-all"
+                                >
+                                    Save
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
             )}
             {showClearConfirm && (
                 <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 backdrop-blur-sm">
