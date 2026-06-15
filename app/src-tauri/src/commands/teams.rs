@@ -974,14 +974,33 @@ pub async fn cmd_add_team_member(
                 .map_err(|e| format!("Failed to add member: {}", e))?;
         }
         Peer::Group(g) => {
-            client
-                .invoke(&tl::functions::messages::AddChatUser {
-                    chat_id: g.raw.id(),
-                    user_id: input_user,
-                    fwd_limit: 100,
-                })
-                .await
-                .map_err(|e| format!("Failed to add member: {}", e))?;
+            match &g.raw {
+                tl::enums::Chat::Chat(chat) => {
+                    client
+                        .invoke(&tl::functions::messages::AddChatUser {
+                            chat_id: chat.id,
+                            user_id: input_user,
+                            fwd_limit: 100,
+                        })
+                        .await
+                        .map_err(|e| format!("Failed to add member: {}", e))?;
+                }
+                tl::enums::Chat::Channel(channel) => {
+                    let input_channel = tl::enums::InputChannel::Channel(tl::types::InputChannel {
+                        channel_id: channel.id,
+                        access_hash: channel.access_hash.ok_or("No access hash for supergroup")?,
+                    });
+
+                    client
+                        .invoke(&tl::functions::channels::InviteToChannel {
+                            channel: input_channel,
+                            users: vec![input_user],
+                        })
+                        .await
+                        .map_err(|e| format!("Failed to add member to supergroup: {}", e))?;
+                }
+                _ => return Err("Unsupported group type for adding member".to_string()),
+            }
         }
         _ => return Err("Invalid peer type".to_string()),
     }
@@ -1203,17 +1222,35 @@ pub async fn cmd_leave_team(
                 .map_err(|e| format!("Failed to leave channel: {}", e))?;
         }
         Peer::Group(g) => {
-            client
-                .invoke(&tl::functions::messages::DeleteChatUser {
-                    chat_id: g.raw.id(),
-                    user_id: tl::enums::InputUser::User(tl::types::InputUser {
-                        user_id: me.raw.id(),
-                        access_hash: 0,
-                    }),
-                    revoke_history: false,
-                })
-                .await
-                .map_err(|e| format!("Failed to leave group: {}", e))?;
+            match &g.raw {
+                tl::enums::Chat::Chat(chat) => {
+                    client
+                        .invoke(&tl::functions::messages::DeleteChatUser {
+                            chat_id: chat.id,
+                            user_id: tl::enums::InputUser::User(tl::types::InputUser {
+                                user_id: me.raw.id(),
+                                access_hash: 0,
+                            }),
+                            revoke_history: false,
+                        })
+                        .await
+                        .map_err(|e| format!("Failed to leave group: {}", e))?;
+                }
+                tl::enums::Chat::Channel(channel) => {
+                    let input_channel = tl::enums::InputChannel::Channel(tl::types::InputChannel {
+                        channel_id: channel.id,
+                        access_hash: channel.access_hash.ok_or("No access hash for supergroup")?,
+                    });
+
+                    client
+                        .invoke(&tl::functions::channels::LeaveChannel {
+                            channel: input_channel,
+                        })
+                        .await
+                        .map_err(|e| format!("Failed to leave supergroup: {}", e))?;
+                }
+                _ => return Err("Unsupported group type for leaving".to_string()),
+            }
         }
         _ => return Err("Invalid peer type".to_string()),
     }
@@ -1419,17 +1456,66 @@ pub async fn cmd_remove_team_member(
                 .map_err(|e| format!("Failed to remove member: {}", e))?;
         }
         Peer::Group(g) => {
-            client
-                .invoke(&tl::functions::messages::DeleteChatUser {
-                    chat_id: g.raw.id(),
-                    user_id: tl::enums::InputUser::User(tl::types::InputUser {
+            match &g.raw {
+                tl::enums::Chat::Chat(chat) => {
+                    client
+                        .invoke(&tl::functions::messages::DeleteChatUser {
+                            chat_id: chat.id,
+                            user_id: tl::enums::InputUser::User(tl::types::InputUser {
+                                user_id,
+                                access_hash,
+                            }),
+                            revoke_history: false,
+                        })
+                        .await
+                        .map_err(|e| format!("Failed to remove member: {}", e))?;
+                }
+                tl::enums::Chat::Channel(channel) => {
+                    let input_channel = tl::enums::InputChannel::Channel(tl::types::InputChannel {
+                        channel_id: channel.id,
+                        access_hash: channel.access_hash.ok_or("No access hash for supergroup")?,
+                    });
+
+                    let input_peer = tl::enums::InputPeer::User(tl::types::InputPeerUser {
                         user_id,
                         access_hash,
-                    }),
-                    revoke_history: false,
-                })
-                .await
-                .map_err(|e| format!("Failed to remove member: {}", e))?;
+                    });
+
+                    let banned_rights = tl::enums::ChatBannedRights::Rights(tl::types::ChatBannedRights {
+                        view_messages: true,
+                        send_messages: false,
+                        send_media: false,
+                        send_stickers: false,
+                        send_gifs: false,
+                        send_games: false,
+                        send_inline: false,
+                        embed_links: false,
+                        send_polls: false,
+                        change_info: false,
+                        invite_users: false,
+                        pin_messages: false,
+                        manage_topics: false,
+                        send_photos: false,
+                        send_videos: false,
+                        send_roundvideos: false,
+                        send_audios: false,
+                        send_voices: false,
+                        send_docs: false,
+                        send_plain: false,
+                        until_date: 0,
+                    });
+
+                    client
+                        .invoke(&tl::functions::channels::EditBanned {
+                            channel: input_channel,
+                            participant: input_peer,
+                            banned_rights,
+                        })
+                        .await
+                        .map_err(|e| format!("Failed to remove member from supergroup: {}", e))?;
+                }
+                _ => return Err("Unsupported group type for member removal".to_string()),
+            }
         }
         _ => return Err("Invalid peer type".to_string()),
     }
@@ -1527,14 +1613,75 @@ pub async fn cmd_set_member_role(
                 .map_err(|e| format!("Failed to set role: {}", e))?;
         }
         Peer::Group(g) => {
-            client
-                .invoke(&tl::functions::messages::EditChatAdmin {
-                    chat_id: g.raw.id(),
-                    user_id: input_user,
-                    is_admin: is_promote,
-                })
-                .await
-                .map_err(|e| format!("Failed to set role: {}", e))?;
+            match &g.raw {
+                tl::enums::Chat::Chat(chat) => {
+                    client
+                        .invoke(&tl::functions::messages::EditChatAdmin {
+                            chat_id: chat.id,
+                            user_id: input_user,
+                            is_admin: is_promote,
+                        })
+                        .await
+                        .map_err(|e| format!("Failed to set role: {}", e))?;
+                }
+                tl::enums::Chat::Channel(channel) => {
+                    let input_channel = tl::enums::InputChannel::Channel(tl::types::InputChannel {
+                        channel_id: channel.id,
+                        access_hash: channel.access_hash.ok_or("No access hash for supergroup")?,
+                    });
+
+                    let admin_rights = if is_promote {
+                        tl::enums::ChatAdminRights::Rights(tl::types::ChatAdminRights {
+                            change_info: true,
+                            post_messages: true,
+                            edit_messages: true,
+                            delete_messages: true,
+                            ban_users: true,
+                            invite_users: true,
+                            pin_messages: true,
+                            add_admins: false,
+                            anonymous: false,
+                            manage_call: true,
+                            other: true,
+                            manage_topics: true,
+                            post_stories: true,
+                            edit_stories: true,
+                            delete_stories: true,
+                            manage_direct_messages: true,
+                        })
+                    } else {
+                        tl::enums::ChatAdminRights::Rights(tl::types::ChatAdminRights {
+                            change_info: false,
+                            post_messages: false,
+                            edit_messages: false,
+                            delete_messages: false,
+                            ban_users: false,
+                            invite_users: false,
+                            pin_messages: false,
+                            add_admins: false,
+                            anonymous: false,
+                            manage_call: false,
+                            other: false,
+                            manage_topics: false,
+                            post_stories: false,
+                            edit_stories: false,
+                            delete_stories: false,
+                            manage_direct_messages: false,
+                        })
+                    };
+
+                    client
+                        .invoke(&tl::functions::channels::EditAdmin {
+                            channel: input_channel,
+                            user_id: input_user,
+                            admin_rights,
+                            rank: if is_promote { "admin".to_string() } else { "".to_string() },
+                        })
+                        .await
+                        .map_err(|e| format!("Failed to set role in supergroup: {}", e))?;
+                }
+                _ => return Err("Unsupported group type for setting role".to_string()),
+            }
         }
         _ => return Err("Invalid peer type".to_string()),
     }
@@ -1637,12 +1784,30 @@ pub async fn cmd_delete_team(
                 .map_err(|e| format!("Failed to delete team: {}", e))?;
         }
         Peer::Group(g) => {
-            client
-                .invoke(&tl::functions::messages::DeleteChat {
-                    chat_id: g.raw.id(),
-                })
-                .await
-                .map_err(|e| format!("Failed to delete team: {}", e))?;
+            match &g.raw {
+                tl::enums::Chat::Chat(chat) => {
+                    client
+                        .invoke(&tl::functions::messages::DeleteChat {
+                            chat_id: chat.id,
+                        })
+                        .await
+                        .map_err(|e| format!("Failed to delete team: {}", e))?;
+                }
+                tl::enums::Chat::Channel(channel) => {
+                    let input_channel = tl::enums::InputChannel::Channel(tl::types::InputChannel {
+                        channel_id: channel.id,
+                        access_hash: channel.access_hash.ok_or("No access hash for supergroup")?,
+                    });
+
+                    client
+                        .invoke(&tl::functions::channels::DeleteChannel {
+                            channel: input_channel,
+                        })
+                        .await
+                        .map_err(|e| format!("Failed to delete supergroup: {}", e))?;
+                }
+                _ => return Err("Unsupported group type for deletion".to_string()),
+            }
         }
         _ => return Err("Invalid peer type".to_string()),
     }
@@ -1734,14 +1899,35 @@ pub async fn cmd_edit_team(
             }
         }
         Peer::Group(g) => {
-            if let Some(name) = new_name {
-                client
-                    .invoke(&tl::functions::messages::EditChatTitle {
-                        chat_id: g.raw.id(),
-                        title: name,
-                    })
-                    .await
-                    .map_err(|e| format!("Failed to rename: {}", e))?;
+            match &g.raw {
+                tl::enums::Chat::Chat(chat) => {
+                    if let Some(name) = new_name {
+                        client
+                            .invoke(&tl::functions::messages::EditChatTitle {
+                                chat_id: chat.id,
+                                title: name,
+                            })
+                            .await
+                            .map_err(|e| format!("Failed to rename: {}", e))?;
+                    }
+                }
+                tl::enums::Chat::Channel(channel) => {
+                    if let Some(name) = new_name {
+                        let input_channel = tl::enums::InputChannel::Channel(tl::types::InputChannel {
+                            channel_id: channel.id,
+                            access_hash: channel.access_hash.ok_or("No access hash for supergroup")?,
+                        });
+
+                        client
+                            .invoke(&tl::functions::channels::EditTitle {
+                                channel: input_channel,
+                                title: name,
+                            })
+                            .await
+                            .map_err(|e| format!("Failed to rename supergroup: {}", e))?;
+                    }
+                }
+                _ => return Err("Unsupported group type for editing".to_string()),
             }
 
             if let Some(desc) = new_description {

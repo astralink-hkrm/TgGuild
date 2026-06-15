@@ -48,6 +48,7 @@ import { MemberListModal } from './MemberListModal';
 import { SharedMediaModal } from './SharedMediaModal';
 import { MessageActions } from './MessageActions';
 import { SystemMessage } from './SystemMessage';
+import { useConfirm } from '../../context/ConfirmContext';
 import { GroupMembersPanel } from './GroupMembersPanel';
 import { PinnedMessagesBar } from './PinnedMessagesBar';
 import { ForwardPickerModal } from './ForwardPickerModal';
@@ -204,6 +205,7 @@ export function TeamChat({
     const [starStatus, setStarStatus] = useState<Record<string, boolean>>({});
 
     const realtime = useRealtime(groupId, isDirect);
+    const { confirm } = useConfirm();
 
     useEffect(() => {
         if (!showThreeDotMenu) return;
@@ -1031,13 +1033,19 @@ export function TeamChat({
     const handleLeave = async () => {
         setShowThreeDotMenu(false);
         if (!groupId) return;
-        if (!window.confirm('Are you sure you want to leave this group? You can only rejoin via an invite link.')) return;
+        const confirmed = await confirm({
+            title: 'Leave Group',
+            message: 'Are u sure want to leave the group?',
+            confirmText: 'Yes',
+            cancelText: 'No',
+            variant: 'danger'
+        });
+        if (!confirmed) return;
         try {
             await invoke('cmd_leave_team', { teamId: groupId });
-            toast.success('Left the group');
             window.location.reload();
         } catch (e) {
-            toast.error(`Failed to leave: ${e}`);
+            console.error('Failed to leave:', e);
         }
     };
 
