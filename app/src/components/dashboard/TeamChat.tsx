@@ -34,9 +34,10 @@ import {
     Info,
     Link2,
     LogOut,
-    Trash2,
+    Pencil,
     Share2,
     Star,
+    Trash2,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { TelegramAvatar } from './TelegramAvatar';
@@ -1341,6 +1342,23 @@ export function TeamChat({
                                             <Link2 className="w-4 h-4 text-telegram-subtext" />
                                             Invite Members
                                         </button>
+                                        {canManageMembers && (
+                                            <button
+                                                onClick={() => {
+                                                    setShowThreeDotMenu(false);
+                                                    const name = window.prompt('Enter new group name:', groupName);
+                                                    if (name && name.trim()) {
+                                                        invoke('cmd_edit_team', { teamId: groupId, newName: name.trim(), newDescription: null })
+                                                            .then(() => toast.success('Group name updated'))
+                                                            .catch((e) => toast.error(`Failed: ${e}`));
+                                                    }
+                                                }}
+                                                className="w-full flex items-center gap-3 px-3 py-2.5 text-sm text-telegram-text hover:bg-telegram-hover transition-colors"
+                                            >
+                                                <Pencil className="w-4 h-4 text-telegram-subtext" />
+                                                Rename Group
+                                            </button>
+                                        )}
                                         <div className="h-px bg-telegram-border my-1" />
                                         <button
                                             onClick={handleClearChat}
