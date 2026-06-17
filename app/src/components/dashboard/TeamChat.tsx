@@ -1566,10 +1566,12 @@ export function TeamChat({
                             return (
                                 <div key={msg.id} id={`msg-${msg.id}`}>
                                     {showDateSeparator && (
-                                        <div className="sticky top-2 z-10 my-4 flex justify-center">
-                                            <span className="rounded-full border border-telegram-border bg-telegram-surface/95 px-3 py-1 text-[11px] font-medium text-telegram-subtext shadow-sm backdrop-blur transition-colors">
+                                        <div className="sticky top-2 z-10 my-5 flex items-center gap-3">
+                                            <div className="flex-1 h-px bg-gradient-to-r from-transparent via-telegram-border/40 to-telegram-border/60" />
+                                            <span className="text-[11px] font-semibold text-telegram-subtext/70 tracking-wide uppercase select-none">
                                                 {formatDateSeparator(msg.date)}
                                             </span>
+                                            <div className="flex-1 h-px bg-gradient-to-l from-transparent via-telegram-border/40 to-telegram-border/60" />
                                         </div>
                                     )}
                                     {isSystem ? (

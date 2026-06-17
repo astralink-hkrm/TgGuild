@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react';
-import { Building2, HardDrive, Folder, Plus, RefreshCw, LogOut, Users, LayoutGrid, ChevronDown, ChevronRight, Settings } from 'lucide-react';
+import { useState, useEffect, ReactNode } from 'react';
+import { Building2, HardDrive, Folder, Plus, RefreshCw, LogOut, Users, LayoutGrid, ChevronDown, ChevronRight, Settings, File, Film, Image as ImageIcon, Mic, Music } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { invoke } from '@tauri-apps/api/core';
 import { SidebarItem } from './SidebarItem';
@@ -377,6 +377,18 @@ export function Sidebar({
         }
     };
 
+    const getMediaIcon = (msg: CachedMessagePreview): ReactNode | null => {
+        if (!msg.has_media) return null;
+        const cls = "w-[10px] h-[10px] inline-block align-middle shrink-0";
+        switch (msg.media_type) {
+            case 'photo': case 'image': return <ImageIcon className={cls} />;
+            case 'video': return <Film className={cls} />;
+            case 'audio': return <Music className={cls} />;
+            case 'voice': return <Mic className={cls} />;
+            default: return <File className={cls} />;
+        }
+    };
+
     const visibleGroups = groups.filter(group => isTeamVisible(group.id, teamVisibility));
     const visibleContacts = contacts.filter(contact => isContactVisible(contact.user_id, teamVisibility));
 
@@ -553,7 +565,7 @@ export function Sidebar({
                                     const isTyping = typing?.length > 0;
                                     const timeStr = !isTyping && lastMsg?.date ? formatSidebarDate(lastMsg.date) : null;
 
-                                    let preview: string | null = null;
+                                    let preview: ReactNode = null;
                                     if (isTyping) {
                                         const first = typing![0];
                                         preview = typing!.length === 1
@@ -564,8 +576,15 @@ export function Sidebar({
                                             preview = 'System message';
                                         } else {
                                             const mediaLabel = getMediaLabel(lastMsg);
-                                            const msgText = mediaLabel || lastMsg.text;
-                                            preview = lastMsg.outgoing ? `You: ${msgText}` : `${lastMsg.sender_name}: ${msgText}`;
+                                            const mediaIcon = getMediaIcon(lastMsg);
+                                            const msgContent = mediaIcon ? (
+                                                <span className="inline-flex items-center gap-1 align-middle">
+                                                    <span className="text-telegram-subtext/60 shrink-0">{mediaIcon}</span>
+                                                    <span className="truncate">{mediaLabel}</span>
+                                                </span>
+                                            ) : lastMsg.text;
+                                            const prefix = lastMsg.outgoing ? 'You' : lastMsg.sender_name;
+                                            preview = <span>{prefix}: {msgContent}</span>;
                                         }
                                     }
 
@@ -653,13 +672,19 @@ export function Sidebar({
                                         const isTyping = typing?.length > 0;
                                         const timeStr = !isTyping && lastMsg?.date ? formatSidebarDate(lastMsg.date) : null;
 
-                                        let preview: string | null = null;
+                                        let preview: ReactNode = null;
                                         if (isTyping) {
                                             preview = 'typing...';
                                         } else if (lastMsg) {
                                             const mediaLabel = getMediaLabel(lastMsg);
-                                            const msgText = mediaLabel || lastMsg.text;
-                                            preview = lastMsg.outgoing ? `You: ${msgText}` : msgText;
+                                            const mediaIcon = getMediaIcon(lastMsg);
+                                            const msgContent = mediaIcon ? (
+                                                <span className="inline-flex items-center gap-1 align-middle">
+                                                    <span className="text-telegram-subtext/60 shrink-0">{mediaIcon}</span>
+                                                    <span className="truncate">{mediaLabel}</span>
+                                                </span>
+                                            ) : lastMsg.text;
+                                            preview = lastMsg.outgoing ? <span>You: {msgContent}</span> : msgContent;
                                         }
 
                                         return (
