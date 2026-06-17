@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { Plus, Search, Settings, UserMinus, Users, X } from 'lucide-react';
 import { toast } from 'sonner';
@@ -77,6 +77,9 @@ export function TeamsPanel({ onGroupCreated }: TeamsPanelProps) {
     const [newTeamDesc, setNewTeamDesc] = useState('');
     const [canManageMembers, setCanManageMembers] = useState(false);
 
+    const selectedTeam = selectedChat?.type === 'group' ? selectedChat.team : null;
+    const selectedContact = selectedChat?.type === 'direct' ? selectedChat.contact : null;
+
     useEffect(() => {
         const checkAdmin = async () => {
             if (!selectedTeam) {
@@ -131,9 +134,6 @@ export function TeamsPanel({ onGroupCreated }: TeamsPanelProps) {
             }
         }
     }, [teamVisibility, teams, contacts, selectedChat]);
-
-    const selectedTeam = selectedChat?.type === 'group' ? selectedChat.team : null;
-    const selectedContact = selectedChat?.type === 'direct' ? selectedChat.contact : null;
 
     const loadInitialData = async () => {
         try {

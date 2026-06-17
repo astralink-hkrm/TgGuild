@@ -1509,7 +1509,7 @@ export function TeamChat({
                 }}
                 onUnpin={(messageId) => handleUnpin(messageId)}
                 onShowAll={() => setShowStarredView(true)}
-                canUnpin={true}
+                canUnpin={canManageMembers}
             />
             <div
                 ref={messagesContainerRef}
@@ -1593,7 +1593,7 @@ export function TeamChat({
                                                 onDelete={() => handleDeleteClick(msg)}
                                                 onInfo={() => setShowMessageInfo(msg)}
                                                 onReact={() => setReactionPickerFor(reactionPickerFor === msg.id ? null : msg.id)}
-                                                onPin={() => handlePin(msg.id)}
+                                                onPin={canManageMembers ? () => handlePin(msg.id) : undefined}
                                                 isPinned={pinnedMessages.some(p => p.message_id === msg.id)}
                                                 onStar={() => handleStarToggle(msg)}
                                                 isStarred={starStatus[`${groupId}-${msg.id}`] || false}
@@ -1668,6 +1668,7 @@ export function TeamChat({
                                                     {msg.edited && <span className="italic">edited</span>}
                                                     {starStatus[`${groupId}-${msg.id}`] && <Star className="h-3 w-3 fill-yellow-400 text-yellow-400" />}
                                                     {pinnedMessages.some(p => p.message_id === msg.id) && <Pin className="h-3 w-3 rotate-45 text-telegram-primary" />}
+                                                    {canManageMembers && (
                                                     <button
                                                         onClick={() => handlePin(msg.id)}
                                                         className={`opacity-0 transition-opacity hover:opacity-100 group-hover:opacity-100 ${
@@ -1677,6 +1678,7 @@ export function TeamChat({
                                                     >
                                                         <Pin className={`h-3 w-3 ${pinnedMessages.some(p => p.message_id === msg.id) ? 'rotate-45' : ''}`} />
                                                     </button>
+                                                    )}
                                                     <span>{formatTime(msg.date)}</span>
                                                     {outgoing && !msg.pending && (
                                                         <span className="flex items-center" title={

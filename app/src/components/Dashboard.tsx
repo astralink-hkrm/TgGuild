@@ -8,14 +8,13 @@ import { toast } from 'sonner';
 import { TelegramFile, BandwidthStats, FolderTreeNode } from '../types';
 import { formatBytes } from '../utils';
 
-import { Plus, RefreshCw } from 'lucide-react';
+import { RefreshCw } from 'lucide-react';
 
 // Components
 import { Sidebar } from './dashboard/Sidebar';
 import { TopBar } from './dashboard/TopBar';
 import { FileExplorer } from './dashboard/FileExplorer';
 import { TeamChat } from './dashboard/TeamChat';
-import { MemberStack } from './dashboard/MemberStack';
 import { AddSubscriberModal } from './dashboard/AddSubscriberModal';
 import { UploadQueue } from './dashboard/UploadQueue';
 import { DownloadQueue } from './dashboard/DownloadQueue';
