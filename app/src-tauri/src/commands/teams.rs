@@ -4,6 +4,7 @@ use grammers_client::types::Peer;
 use grammers_client::InputMessage;
 use grammers_tl_types as tl;
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 use tauri::State;
 use tauri::Manager;
 use chrono::Utc;
@@ -121,8 +122,33 @@ fn peer_display_name(peer: &Peer) -> String {
             tl::enums::Chat::Channel(channel) => channel.title.clone(),
             _ => "team".to_string(),
         },
-        Peer::User(u) => u.full_name(),
+        Peer::User(u) => resolve_user_display_name(u),
     }
+}
+
+/// Resolve a Telegram User to a display name using the hierarchy:
+/// displayName → username → fullName → fallback identifier.
+/// Never exposes internal IDs, phone numbers, or account IDs
+/// unless no other user information exists.
+fn resolve_user_display_name(user: &grammers_client::types::User) -> String {
+    if let Some(name) = user.first_name() {
+        let trimmed = name.trim();
+        if !trimmed.is_empty() {
+            return trimmed.to_string();
+        }
+    }
+    if let Some(username) = user.username() {
+        let trimmed = username.trim();
+        if !trimmed.is_empty() {
+            return format!("@{}", trimmed);
+        }
+    }
+    let full = user.full_name();
+    let trimmed = full.trim();
+    if !trimmed.is_empty() {
+        return trimmed.to_string();
+    }
+    format!("User {}", user.raw.id())
 }
 
 fn serialize_i64_to_string<S>(val: &i64, serializer: S) -> Result<S::Ok, S::Error>
@@ -215,6 +241,129 @@ fn chat_has_photo(chat: &tl::enums::Chat) -> bool {
         },
         _ => false,
     }
+}
+
+/// Get the role of a user in a group by iterating participants.
+/// Returns "owner", "admin", "member", or an error.
+async fn get_user_role_in_group(
+    client: &grammers_client::Client,
+    team_id: i64,
+    user_id: i64,
+    peer_cache: &Arc<tokio::sync::RwLock<HashMap<i64, Peer>>>,
+) -> Result<String, String> {
+    let peer = resolve_peer(client, Some(team_id), peer_cache).await?;
+    let mut participants = client.iter_participants(&peer);
+    while let Some(p) = participants.next().await.map_err(|e| e.to_string())? {
+        if p.user.raw.id() == user_id {
+            return Ok(match p.role {
+                grammers_client::types::Role::Creator(_) => "owner".to_string(),
+                grammers_client::types::Role::Admin(_) => "admin".to_string(),
+                _ => "member".to_string(),
+            });
+        }
+    }
+    Err("User not found in group".to_string())
+}
+
+/// Resolve a user ID to a display name using the hierarchy:
+/// displayName → username → fullName → fallback identifier.
+/// Checks the peer cache first, then tries users.getUsers API,
+/// and finally falls back to a dialog scan.
+async fn get_user_display_name(
+    client: &grammers_client::Client,
+    user_id: i64,
+    peer_cache: &Arc<tokio::sync::RwLock<HashMap<i64, Peer>>>,
+) -> String {
+    // Fast path: check peer cache
+    {
+        let cache = peer_cache.read().await;
+        if let Some(peer) = cache.get(&user_id) {
+            if let Peer::User(u) = peer {
+                return resolve_user_display_name(u);
+            }
+        }
+    }
+
+    // Try users.getUsers API (works for users in mutual groups)
+    let input_users = vec![tl::enums::InputUser::User(tl::types::InputUser {
+        user_id,
+        access_hash: 0,
+    })];
+    if let Ok(users) = client
+        .invoke(&tl::functions::users::GetUsers { id: input_users })
+        .await
+    {
+        if let Some(tl::enums::User::User(u)) = users.first() {
+            let name = match u.first_name.as_deref() {
+                Some(f) if !f.is_empty() => f.to_string(),
+                _ => match u.username.as_deref() {
+                    Some(un) if !un.is_empty() => format!("@{}", un),
+                    _ => {
+                        let first = u.first_name.as_deref().unwrap_or("");
+                        let last = u.last_name.as_deref().unwrap_or("");
+                        let full = format!("{} {}", first, last).trim().to_string();
+                        if !full.is_empty() { full } else { format!("User {}", user_id) }
+                    }
+                },
+            };
+            return name;
+        }
+    }
+
+    // Fallback: resolve_peer with cache (scans dialogs)
+    if let Ok(peer) = resolve_peer(client, Some(user_id), peer_cache).await {
+        if let Peer::User(u) = &peer {
+            return resolve_user_display_name(u);
+        }
+        return peer_display_name(&peer);
+    }
+
+    format!("User {}", user_id)
+}
+
+/// Send a system message (action-like text) to the group.
+async fn send_system_message(
+    client: &grammers_client::Client,
+    team_id: i64,
+    peer_cache: &Arc<tokio::sync::RwLock<HashMap<i64, Peer>>>,
+    text: String,
+) -> Result<(), String> {
+    let peer = resolve_peer(client, Some(team_id), peer_cache).await?;
+    client
+        .send_message(&peer, InputMessage::new().text(text))
+        .await
+        .map_err(|e| format!("Failed to send system message: {}", e))?;
+    Ok(())
+}
+
+/// Check if the current user is the owner of a group. Returns Ok(()) if true.
+async fn require_owner(
+    client: &grammers_client::Client,
+    team_id: i64,
+    peer_cache: &Arc<tokio::sync::RwLock<HashMap<i64, Peer>>>,
+) -> Result<(), String> {
+    let me = client.get_me().await.map_err(|e| e.to_string())?;
+    let my_id = me.raw.id();
+    let role = get_user_role_in_group(client, team_id, my_id, peer_cache).await?;
+    if role != "owner" {
+        return Err("Only the group owner can perform this action".to_string());
+    }
+    Ok(())
+}
+
+/// Check if the current user is owner or admin. Returns Ok(()) if true.
+async fn require_admin_or_owner(
+    client: &grammers_client::Client,
+    team_id: i64,
+    peer_cache: &Arc<tokio::sync::RwLock<HashMap<i64, Peer>>>,
+) -> Result<(), String> {
+    let me = client.get_me().await.map_err(|e| e.to_string())?;
+    let my_id = me.raw.id();
+    let role = get_user_role_in_group(client, team_id, my_id, peer_cache).await?;
+    if role != "owner" && role != "admin" {
+        return Err("Only group admins or the owner can perform this action".to_string());
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -1442,6 +1591,34 @@ pub async fn cmd_remove_team_member(
         .and_then(|s| s.parse::<i64>().ok())
         .unwrap_or(0);
 
+    let me = client.get_me().await.map_err(|e| e.to_string())?;
+    let caller_id = me.raw.id();
+
+    // Cannot remove yourself
+    if user_id == caller_id {
+        return Err("You cannot remove yourself. Use 'Leave Group' instead.".to_string());
+    }
+
+    // Check caller's role and target's role
+    let caller_role = get_user_role_in_group(&client, team_id, caller_id, &state.peer_cache).await?;
+    let target_role = get_user_role_in_group(&client, team_id, user_id, &state.peer_cache).await?;
+
+    // Cannot remove the owner
+    if target_role == "owner" {
+        return Err("Cannot remove the group owner".to_string());
+    }
+
+    // Permission check: owner can remove anyone, admin can only remove members
+    match caller_role.as_str() {
+        "owner" => { /* owner can remove anyone except owner */ }
+        "admin" => {
+            if target_role == "admin" {
+                return Err("Admins cannot remove other admins. Only the owner can.".to_string());
+            }
+        }
+        _ => return Err("You do not have permission to remove members".to_string()),
+    }
+
     log::info!("Removing user {} from team {}", user_id, team_id);
 
     let peer = resolve_peer(&client, Some(team_id), &state.peer_cache).await?;
@@ -1556,6 +1733,12 @@ pub async fn cmd_remove_team_member(
         _ => return Err("Invalid peer type".to_string()),
     }
 
+    // Send system message
+    let actor_name = resolve_user_display_name(&me);
+    let target_name = get_user_display_name(&client, user_id, &state.peer_cache).await;
+    let msg = format!("{} removed {} from the group", actor_name, target_name);
+    send_system_message(&client, team_id, &state.peer_cache, msg).await?;
+
     log::info!("Removed user {} from team {}", user_id, team_id);
     Ok(true)
 }
@@ -1582,6 +1765,9 @@ pub async fn cmd_set_member_role(
         .unwrap_or(0);
 
     log::info!("Setting role '{}' for user {} in team {}", role, user_id, team_id);
+
+    // Permission check: only owner can promote/demote to/from admin
+    require_owner(&client, team_id, &state.peer_cache).await?;
 
     let peer = resolve_peer(&client, Some(team_id), &state.peer_cache).await?;
     let input_user = tl::enums::InputUser::User(tl::types::InputUser {
@@ -1722,6 +1908,17 @@ pub async fn cmd_set_member_role(
         _ => return Err("Invalid peer type".to_string()),
     }
 
+    // Send system message
+    let me = client.get_me().await.map_err(|e| e.to_string())?;
+    let actor_name = resolve_user_display_name(&me);
+    let target_name = get_user_display_name(&client, user_id, &state.peer_cache).await;
+    let msg = if is_promote {
+        format!("{} was promoted to Admin by {}", target_name, actor_name)
+    } else {
+        format!("{} is no longer an Admin", target_name)
+    };
+    send_system_message(&client, team_id, &state.peer_cache, msg).await?;
+
     log::info!("Successfully set role '{}' for user {} in team {}", role, user_id, team_id);
     Ok(true)
 }
@@ -1828,6 +2025,79 @@ pub async fn cmd_create_team(
 }
 
 #[tauri::command]
+pub async fn cmd_transfer_ownership(
+    team_id: i64,
+    new_owner_user_id_str: String,
+    new_owner_access_hash_str: Option<String>,
+    password: String,
+    state: State<'_, TelegramState>,
+) -> Result<bool, String> {
+    let client_opt = state.client.lock().await.clone();
+    if client_opt.is_none() {
+        return Ok(false);
+    }
+    let client = client_opt.unwrap();
+
+    // Only owner can transfer
+    require_owner(&client, team_id, &state.peer_cache).await?;
+
+    let new_owner_id = new_owner_user_id_str
+        .parse::<i64>()
+        .map_err(|_| "Invalid user ID format".to_string())?;
+    let new_owner_hash = new_owner_access_hash_str
+        .and_then(|s| s.parse::<i64>().ok())
+        .unwrap_or(0);
+
+    let me = client.get_me().await.map_err(|e| e.to_string())?;
+    if me.raw.id() == new_owner_id {
+        return Err("You are already the owner".to_string());
+    }
+
+    log::info!("Transferring ownership of team {} to user {}", team_id, new_owner_id);
+
+    let peer = resolve_peer(&client, Some(team_id), &state.peer_cache).await?;
+
+    match &peer {
+        Peer::Channel(c) => {
+            let input_channel = tl::enums::InputChannel::Channel(tl::types::InputChannel {
+                channel_id: c.raw.id,
+                access_hash: c.raw.access_hash.ok_or("No access hash")?,
+            });
+
+            let input_user = tl::enums::InputUser::User(tl::types::InputUser {
+                user_id: new_owner_id,
+                access_hash: new_owner_hash,
+            });
+
+            client
+                .invoke(&tl::functions::channels::EditCreator {
+                    channel: input_channel,
+                    user_id: input_user,
+                    password: tl::enums::InputCheckPasswordSrp::InputCheckPasswordEmpty,
+                })
+                .await
+                .map_err(|e| {
+                    let err = e.to_string();
+                    if err.contains("PASSWORD_MISSING") || err.contains("2FA") {
+                        "Transfer requires Two-Factor Authentication. Please enable 2FA in Telegram settings first.".to_string()
+                    } else {
+                        format!("Failed to transfer ownership: {}", err)
+                    }
+                })?;
+        }
+        _ => return Err("Ownership transfer is only supported for supergroups (channels)".to_string()),
+    }
+
+    let actor_name = resolve_user_display_name(&me);
+    let target_name = get_user_display_name(&client, new_owner_id, &state.peer_cache).await;
+    let msg = format!("{} transferred ownership to {}", actor_name, target_name);
+    send_system_message(&client, team_id, &state.peer_cache, msg).await?;
+
+    log::info!("Transferred ownership of team {} to user {}", team_id, new_owner_id);
+    Ok(true)
+}
+
+#[tauri::command]
 pub async fn cmd_delete_team(
     team_id: i64,
     state: State<'_, TelegramState>,
@@ -1837,6 +2107,9 @@ pub async fn cmd_delete_team(
         return Ok(false);
     }
     let client = client_opt.unwrap();
+
+    // Only owner can delete
+    require_owner(&client, team_id, &state.peer_cache).await?;
 
     log::info!("Deleting team {}", team_id);
 
@@ -1934,6 +2207,9 @@ pub async fn cmd_edit_team(
     }
     let client = client_opt.unwrap();
 
+    // Only owner or admin can edit group info
+    require_admin_or_owner(&client, team_id, &state.peer_cache).await?;
+
     log::info!(
         "Editing team {} with name {:?} and description {:?}",
         team_id,
@@ -1941,6 +2217,8 @@ pub async fn cmd_edit_team(
         new_description
     );
 
+    let me = client.get_me().await.map_err(|e| e.to_string())?;
+    let actor_name = resolve_user_display_name(&me);
     let peer = resolve_peer(&client, Some(team_id), &state.peer_cache).await?;
 
     match &peer {
@@ -1950,22 +2228,22 @@ pub async fn cmd_edit_team(
                 access_hash: c.raw.access_hash.ok_or("No access hash")?,
             });
 
-            if let Some(name) = new_name {
+            if let Some(ref name) = new_name {
                 client
                     .invoke(&tl::functions::channels::EditTitle {
                         channel: input_channel.clone(),
-                        title: name,
+                        title: name.clone(),
                     })
                     .await
                     .map_err(|e| format!("Failed to rename: {}", e))?;
             }
 
-            if let Some(desc) = new_description {
+            if let Some(ref desc) = new_description {
                 let peer_input = peer_to_input_peer(&peer)?;
                 client
                     .invoke(&tl::functions::messages::EditChatAbout {
                         peer: peer_input,
-                        about: desc,
+                        about: desc.clone(),
                     })
                     .await
                     .map_err(|e| format!("Failed to update description: {}", e))?;
@@ -1974,18 +2252,18 @@ pub async fn cmd_edit_team(
         Peer::Group(g) => {
             match &g.raw {
                 tl::enums::Chat::Chat(chat) => {
-                    if let Some(name) = new_name {
+                    if let Some(ref name) = new_name {
                         client
                             .invoke(&tl::functions::messages::EditChatTitle {
                                 chat_id: chat.id,
-                                title: name,
+                                title: name.clone(),
                             })
                             .await
                             .map_err(|e| format!("Failed to rename: {}", e))?;
                     }
                 }
                 tl::enums::Chat::Channel(channel) => {
-                    if let Some(name) = new_name {
+                    if let Some(ref name) = new_name {
                         let input_channel = tl::enums::InputChannel::Channel(tl::types::InputChannel {
                             channel_id: channel.id,
                             access_hash: channel.access_hash.ok_or("No access hash for supergroup")?,
@@ -1994,7 +2272,7 @@ pub async fn cmd_edit_team(
                         client
                             .invoke(&tl::functions::channels::EditTitle {
                                 channel: input_channel,
-                                title: name,
+                                title: name.clone(),
                             })
                             .await
                             .map_err(|e| format!("Failed to rename supergroup: {}", e))?;
@@ -2003,18 +2281,28 @@ pub async fn cmd_edit_team(
                 _ => return Err("Unsupported group type for editing".to_string()),
             }
 
-            if let Some(desc) = new_description {
+            if let Some(ref desc) = new_description {
                 let peer_input = peer_to_input_peer(&peer)?;
                 client
                     .invoke(&tl::functions::messages::EditChatAbout {
                         peer: peer_input,
-                        about: desc,
+                        about: desc.clone(),
                     })
                     .await
                     .map_err(|e| format!("Failed to update description: {}", e))?;
             }
         }
         _ => return Err("Invalid peer type".to_string()),
+    }
+
+    // Send system messages for name/description changes
+    if let Some(ref name) = new_name {
+        let msg = format!("{} changed the group name to \"{}\"", actor_name, name);
+        let _ = send_system_message(&client, team_id, &state.peer_cache, msg).await;
+    }
+    if new_description.is_some() {
+        let msg = format!("{} updated the group description", actor_name);
+        let _ = send_system_message(&client, team_id, &state.peer_cache, msg).await;
     }
 
     log::info!("Edited team {}", team_id);
@@ -2064,22 +2352,13 @@ pub async fn cmd_get_team_messages(
 
         let (sender_name, sender_photo_url) = match msg.sender() {
             Some(Peer::User(u)) => {
-                let first = if let Some(f) = u.first_name() {
-                    f.to_string()
-                } else {
-                    "Unknown".to_string()
-                };
-                let full_name = if let Some(l) = u.last_name() {
-                    format!("{} {}", first, l)
-                } else {
-                    first
-                };
+                let name = resolve_user_display_name(&u);
                 let photo = if user_has_photo(&u.raw) {
                     Some("present".to_string())
                 } else {
                     None
                 };
-                (full_name, photo)
+                (name, photo)
             }
             _ => ("Unknown".to_string(), None),
         };
@@ -2108,17 +2387,20 @@ pub async fn cmd_get_team_messages(
                         (format!("📌 {} pinned a message", sender_name), Some(pinned_id.to_string()))
                     }
                     tl::enums::MessageAction::ChatAddUser(action) => {
-                        let users_str = action.users.iter()
-                            .map(|uid| uid.to_string())
-                            .collect::<Vec<_>>()
-                            .join(", ");
+                        let mut user_names = Vec::new();
+                        for uid in &action.users {
+                            let name = get_user_display_name(&client, *uid, &state.peer_cache).await;
+                            user_names.push(name);
+                        }
+                        let users_str = user_names.join(", ");
                         (format!("👋 {} joined the group", users_str), None)
                     }
                     tl::enums::MessageAction::ChatJoinedByLink(_action) => {
                         (format!("👋 {} joined the group via invite link", sender_name), None)
                     }
                     tl::enums::MessageAction::ChatDeleteUser(action) => {
-                        (format!("👋 {} left the group", action.user_id), None)
+                        let name = get_user_display_name(&client, action.user_id, &state.peer_cache).await;
+                        (format!("👋 {} left the group", name), None)
                     }
                     tl::enums::MessageAction::ChatCreate(action) => {
                         (format!("Group created: {}", action.title), None)
@@ -2471,6 +2753,14 @@ pub async fn cmd_pin_team_message(
         return Ok(false);
     }
     let client = client_opt.unwrap();
+
+    // Only admins and owners can pin
+    if let Some(tid) = team_id {
+        require_admin_or_owner(&client, tid, &state.peer_cache)
+            .await
+            .map_err(|_| "Only admins can pin messages.".to_string())?;
+    }
+
     let peer = resolve_peer(&client, team_id, &state.peer_cache).await?;
     let input_peer = resolve_input_peer(&peer)?;
 
@@ -2479,73 +2769,20 @@ pub async fn cmd_pin_team_message(
         team_id, message_id
     );
 
-    let pin_result = client
+    client
         .invoke(&tl::functions::messages::UpdatePinnedMessage {
             silent: false,
             unpin: false,
             pm_oneside: false,
-            peer: input_peer.clone(),
+            peer: input_peer,
             id: message_id,
         })
-        .await;
-
-    match pin_result {
-        Ok(_) => {}
-        Err(e) => {
-            let err_str = e.to_string();
-            if err_str.contains("CHAT_ADMIN_REQUIRED") || err_str.contains("RIGHTS") {
-                log::info!("[cmd_pin_team_message] Permission denied, trying to enable everyone-can-pin first...");
-                // Try to enable pinning for all members, then retry
-                let _ = client
-                    .invoke(&tl::functions::messages::EditChatDefaultBannedRights {
-                        peer: input_peer.clone(),
-                        banned_rights: tl::enums::ChatBannedRights::Rights(tl::types::ChatBannedRights {
-                            view_messages: false,
-                            send_messages: false,
-                            send_media: false,
-                            send_stickers: false,
-                            send_gifs: false,
-                            send_games: false,
-                            send_inline: false,
-                            embed_links: false,
-                            send_polls: false,
-                            change_info: false,
-                            invite_users: false,
-                            pin_messages: false,
-                            manage_topics: false,
-                            send_photos: false,
-                            send_videos: false,
-                            send_roundvideos: false,
-                            send_audios: false,
-                            send_voices: false,
-                            send_docs: false,
-                            send_plain: false,
-                            until_date: 0,
-                        }),
-                    })
-                    .await;
-
-                client
-                    .invoke(&tl::functions::messages::UpdatePinnedMessage {
-                        silent: false,
-                        unpin: false,
-                        pm_oneside: false,
-                        peer: input_peer.clone(),
-                        id: message_id,
-                    })
-                    .await
-                    .map_err(|e2| {
-                        let msg = format!("Failed to pin message: {}", e2);
-                        log::error!("[cmd_pin_team_message] ERROR: {}", msg);
-                        msg
-                    })?;
-            } else {
-                let msg = format!("Failed to pin message: {}", e);
-                log::error!("[cmd_pin_team_message] ERROR: {}", msg);
-                return Err(msg);
-            }
-        }
-    }
+        .await
+        .map_err(|e| {
+            let msg = format!("Failed to pin message: {}", e);
+            log::error!("[cmd_pin_team_message] ERROR: {}", msg);
+            msg
+        })?;
 
     log::info!("[cmd_pin_team_message] Success");
     Ok(true)
@@ -3024,6 +3261,14 @@ pub async fn cmd_unpin_team_message(
         return Ok(false);
     }
     let client = client_opt.unwrap();
+
+    // Only admins and owners can unpin
+    if let Some(tid) = team_id {
+        require_admin_or_owner(&client, tid, &state.peer_cache)
+            .await
+            .map_err(|_| "Only admins can unpin messages.".to_string())?;
+    }
+
     let peer = resolve_peer(&client, team_id, &state.peer_cache).await?;
     let input_peer = resolve_input_peer(&peer)?;
 
@@ -3032,72 +3277,20 @@ pub async fn cmd_unpin_team_message(
         team_id, message_id
     );
 
-    let unpin_result = client
+    client
         .invoke(&tl::functions::messages::UpdatePinnedMessage {
             silent: false,
             unpin: true,
             pm_oneside: false,
-            peer: input_peer.clone(),
+            peer: input_peer,
             id: message_id,
         })
-        .await;
-
-    match unpin_result {
-        Ok(_) => {}
-        Err(e) => {
-            let err_str = e.to_string();
-            if err_str.contains("CHAT_ADMIN_REQUIRED") || err_str.contains("RIGHTS") {
-                log::info!("[cmd_unpin_team_message] Permission denied, trying to enable everyone-can-pin first...");
-                let _ = client
-                    .invoke(&tl::functions::messages::EditChatDefaultBannedRights {
-                        peer: input_peer.clone(),
-                        banned_rights: tl::enums::ChatBannedRights::Rights(tl::types::ChatBannedRights {
-                            view_messages: false,
-                            send_messages: false,
-                            send_media: false,
-                            send_stickers: false,
-                            send_gifs: false,
-                            send_games: false,
-                            send_inline: false,
-                            embed_links: false,
-                            send_polls: false,
-                            change_info: false,
-                            invite_users: false,
-                            pin_messages: false,
-                            manage_topics: false,
-                            send_photos: false,
-                            send_videos: false,
-                            send_roundvideos: false,
-                            send_audios: false,
-                            send_voices: false,
-                            send_docs: false,
-                            send_plain: false,
-                            until_date: 0,
-                        }),
-                    })
-                    .await;
-
-                client
-                    .invoke(&tl::functions::messages::UpdatePinnedMessage {
-                        silent: false,
-                        unpin: true,
-                        pm_oneside: false,
-                        peer: input_peer.clone(),
-                        id: message_id,
-                    })
-                    .await
-                    .map_err(|e2| {
-                        let msg = format!("Failed to unpin message: {}", e2);
-                        log::error!("[cmd_unpin_team_message] ERROR: {}", msg);
-                        msg
-                    })?;
-            } else {
-                let msg = format!("Failed to unpin message: {}", e);
-                log::error!("[cmd_unpin_team_message] ERROR: {}", msg);
-                return Err(msg);
-            }
-        }
-    }
+        .await
+        .map_err(|e| {
+            let msg = format!("Failed to unpin message: {}", e);
+            log::error!("[cmd_unpin_team_message] ERROR: {}", msg);
+            msg
+        })?;
 
     log::info!("[cmd_unpin_team_message] Success");
     Ok(true)
@@ -3149,7 +3342,9 @@ pub async fn cmd_get_pinned_messages(
         if let tl::enums::Message::Message(msg) = msg_enum {
             let sender_name = if let Some(ref from_id) = msg.from_id {
                 match from_id {
-                    tl::enums::Peer::User(u) => format!("User({})", u.user_id),
+                    tl::enums::Peer::User(u) => {
+                        get_user_display_name(&client, u.user_id, &state.peer_cache).await
+                    }
                     _ => "Unknown".to_string(),
                 }
             } else {
