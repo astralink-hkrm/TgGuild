@@ -15,8 +15,10 @@ import {
     TEAM_VISIBILITY_CHANGED_EVENT,
     TeamVisibilitySettings,
 } from './teamVisibility';
-import { readTelegramDirectoryCache, saveTelegramDirectoryCache } from './telegramCache';
+import { readTelegramDirectoryCache, saveTelegramDirectoryCache, readTelegramMessageCache } from './telegramCache';
 import { TelegramFolder, BandwidthStats } from '../../types';
+import { parseDate } from '../../utils';
+import { TypingUserData } from '../../hooks/useRealtime';
 
 interface GroupInfo {
     id: number;
@@ -45,6 +47,17 @@ interface CurrentUser {
     username?: string | null;
     phone?: string | null;
     photo_url?: string | null;
+}
+
+interface CachedMessagePreview {
+    text: string;
+    date: string;
+    sender_name: string;
+    outgoing?: boolean;
+    has_media: boolean;
+    media_type: string;
+    media_name: string;
+    message_type?: string;
 }
 
 interface SidebarProps {
@@ -89,6 +102,8 @@ export function Sidebar({
     const [contactsHasMore, setContactsHasMore] = useState(false);
     const [teamsLoadingMore, setTeamsLoadingMore] = useState(false);
     const [contactsLoadingMore, setContactsLoadingMore] = useState(false);
+    const [lastMessages, setLastMessages] = useState<Record<string, CachedMessagePreview | null>>({});
+    const [typingPeers, setTypingPeers] = useState<Record<string, TypingUserData[]>>({});
 
     useEffect(() => {
         loadInitialDirectory();
@@ -211,6 +226,124 @@ export function Sidebar({
     const handleLoadMoreDirect = async () => {
         if (!contactsHasMore || contactsLoadingMore) return;
         await loadMoreDirectChats();
+    };
+
+    useEffect(() => {
+        const msgs: Record<string, CachedMessagePreview | null> = {};
+        for (const group of groups) {
+            const key = String(group.id);
+            const cached = readTelegramMessageCache<any>(key);
+            if (cached && cached.messages.length > 0) {
+                const last = cached.messages[cached.messages.length - 1];
+                msgs[key] = {
+                    text: last.text,
+                    date: last.date,
+                    sender_name: last.sender_name,
+                    outgoing: last.outgoing,
+                    has_media: last.has_media,
+                    media_type: last.media_type,
+                    media_name: last.media_name,
+                    message_type: last.message_type,
+                };
+            } else {
+                msgs[key] = null;
+            }
+        }
+        for (const contact of contacts) {
+            const key = String(contact.user_id);
+            const cached = readTelegramMessageCache<any>(key);
+            if (cached && cached.messages.length > 0) {
+                const last = cached.messages[cached.messages.length - 1];
+                msgs[key] = {
+                    text: last.text,
+                    date: last.date,
+                    sender_name: last.sender_name,
+                    outgoing: last.outgoing,
+                    has_media: last.has_media,
+                    media_type: last.media_type,
+                    media_name: last.media_name,
+                    message_type: last.message_type,
+                };
+            } else {
+                msgs[key] = null;
+            }
+        }
+        setLastMessages(prev => {
+            const prevStr = JSON.stringify(prev);
+            const nextStr = JSON.stringify(msgs);
+            return prevStr === nextStr ? prev : msgs;
+        });
+    }, [groups, contacts]);
+
+    useEffect(() => {
+        if (!teamsExpanded && !directExpanded) return;
+        if (groups.length === 0 && contacts.length === 0) return;
+
+        const pollTyping = async () => {
+            const peers: string[] = [];
+            if (teamsExpanded) {
+                for (const g of groups) {
+                    if (isTeamVisible(g.id, teamVisibility)) peers.push(String(g.id));
+                }
+            }
+            if (directExpanded) {
+                for (const c of contacts) {
+                    if (isContactVisible(c.user_id, teamVisibility)) peers.push(c.user_id);
+                }
+            }
+            const batch = peers.slice(0, 30);
+            if (batch.length === 0) return;
+            const results = await Promise.allSettled(
+                batch.map(peerId =>
+                    invoke<TypingUserData[]>('cmd_get_typing_status', { teamId: Number(peerId) })
+                )
+            );
+            const next: Record<string, TypingUserData[]> = {};
+            for (let i = 0; i < batch.length; i++) {
+                const r = results[i];
+                if (r.status === 'fulfilled' && r.value && r.value.length > 0) {
+                    next[batch[i]] = r.value;
+                }
+            }
+            setTypingPeers(next);
+        };
+
+        pollTyping();
+        const timer = setInterval(pollTyping, 10000);
+        return () => clearInterval(timer);
+    }, [groups, contacts, teamVisibility, teamsExpanded, directExpanded]);
+
+    const formatSidebarDate = (dateStr: string): string => {
+        const parsed = parseDate(dateStr);
+        if (Number.isNaN(parsed.getTime())) return '';
+        const now = new Date();
+        const diffMs = now.getTime() - parsed.getTime();
+        const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+        if (diffDays === 0) {
+            return parsed.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        }
+        if (diffDays === 1) return 'Yesterday';
+        if (diffDays < 7) {
+            return parsed.toLocaleDateString([], { weekday: 'short' });
+        }
+        return parsed.toLocaleDateString([], {
+            month: 'short',
+            day: 'numeric',
+            year: parsed.getFullYear() === now.getFullYear() ? undefined : 'numeric',
+        });
+    };
+
+    const getMediaLabel = (msg: CachedMessagePreview): string | null => {
+        if (!msg.has_media) return null;
+        switch (msg.media_type) {
+            case 'photo': case 'image': return 'Photo';
+            case 'video': return 'Video';
+            case 'audio': return 'Audio';
+            case 'voice': return 'Voice message';
+            case 'document': return msg.media_name || 'Document';
+            case 'file': return msg.media_name || 'File';
+            default: return msg.media_name || 'Media';
+        }
     };
 
     const visibleGroups = groups.filter(group => isTeamVisible(group.id, teamVisibility));
@@ -383,6 +516,28 @@ export function Sidebar({
                                     const sortedMembers = group.top_members
                                         ? [...group.top_members].sort((a, b) => a.first_name.localeCompare(b.first_name))
                                         : [];
+                                    const peerKey = String(group.id);
+                                    const typing = typingPeers[peerKey];
+                                    const lastMsg = lastMessages[peerKey];
+                                    const isTyping = typing?.length > 0;
+                                    const timeStr = !isTyping && lastMsg?.date ? formatSidebarDate(lastMsg.date) : null;
+
+                                    let preview: string | null = null;
+                                    if (isTyping) {
+                                        const first = typing![0];
+                                        preview = typing!.length === 1
+                                            ? `${first.user_name} is typing...`
+                                            : `${first.user_name} and ${typing!.length - 1} others are typing...`;
+                                    } else if (lastMsg) {
+                                        if (lastMsg.message_type === 'system') {
+                                            preview = 'System message';
+                                        } else {
+                                            const mediaLabel = getMediaLabel(lastMsg);
+                                            const msgText = mediaLabel || lastMsg.text;
+                                            preview = lastMsg.outgoing ? `You: ${msgText}` : `${lastMsg.sender_name}: ${msgText}`;
+                                        }
+                                    }
+
                                     return (
                                     <button
                                         key={group.id}
@@ -404,9 +559,19 @@ export function Sidebar({
                                             size="sm"
                                         />
                                         <div className="flex-1 text-left min-w-0">
-                                            <p className="truncate">{group.name}</p>
+                                            <div className="flex items-baseline gap-2">
+                                                <span className="truncate text-xs font-medium leading-5">{group.name}</span>
+                                                {timeStr && (
+                                                    <span className="text-[10px] text-telegram-subtext flex-shrink-0 ml-auto">{timeStr}</span>
+                                                )}
+                                            </div>
+                                            {preview !== null && (
+                                                <p className={`truncate text-[11px] leading-tight ${isTyping ? 'text-telegram-primary' : 'text-telegram-subtext'}`}>
+                                                    {preview}
+                                                </p>
+                                            )}
                                         </div>
-                                        <div className="flex items-center gap-1">
+                                        <div className="flex items-center gap-1 self-start mt-0.5">
                                             {Boolean(group.unread_count) && (
                                                 <span className="h-2 w-2 rounded-full bg-telegram-primary" title={`${group.unread_count} unread`} />
                                             )}
@@ -447,7 +612,23 @@ export function Sidebar({
                                         <span>One on One</span>
                                         {directExpanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
                                     </button>
-                                    {directExpanded && visibleContacts.map(contact => (
+                                    {directExpanded && visibleContacts.map(contact => {
+                                        const peerKey = String(contact.user_id);
+                                        const typing = typingPeers[peerKey];
+                                        const lastMsg = lastMessages[peerKey];
+                                        const isTyping = typing?.length > 0;
+                                        const timeStr = !isTyping && lastMsg?.date ? formatSidebarDate(lastMsg.date) : null;
+
+                                        let preview: string | null = null;
+                                        if (isTyping) {
+                                            preview = 'typing...';
+                                        } else if (lastMsg) {
+                                            const mediaLabel = getMediaLabel(lastMsg);
+                                            const msgText = mediaLabel || lastMsg.text;
+                                            preview = lastMsg.outgoing ? `You: ${msgText}` : msgText;
+                                        }
+
+                                        return (
                                         <button
                                             key={contact.user_id}
                                             onClick={() => {
@@ -463,14 +644,29 @@ export function Sidebar({
                                             }`}
                                         >
                                             <TelegramAvatar user={contact} token={streamToken} size="sm" />
-                                            <span className="min-w-0 flex-1 truncate text-left">
-                                                {contact.first_name} {contact.last_name || ''}
-                                            </span>
-                                            {Boolean(contact.unread_count) && (
-                                                <span className="h-2 w-2 rounded-full bg-telegram-primary" title={`${contact.unread_count} unread`} />
-                                            )}
+                                            <div className="flex-1 text-left min-w-0">
+                                                <div className="flex items-baseline gap-2">
+                                                    <span className="truncate text-xs font-medium leading-5">
+                                                        {contact.first_name} {contact.last_name || ''}
+                                                    </span>
+                                                    {timeStr && (
+                                                        <span className="text-[10px] text-telegram-subtext flex-shrink-0 ml-auto">{timeStr}</span>
+                                                    )}
+                                                </div>
+                                                {preview !== null && (
+                                                    <p className={`truncate text-[11px] leading-tight ${isTyping ? 'text-telegram-primary' : 'text-telegram-subtext'}`}>
+                                                        {preview}
+                                                    </p>
+                                                )}
+                                            </div>
+                                            <div className="flex items-center gap-1 self-start mt-0.5">
+                                                {Boolean(contact.unread_count) && (
+                                                    <span className="h-2 w-2 rounded-full bg-telegram-primary" title={`${contact.unread_count} unread`} />
+                                                )}
+                                            </div>
                                         </button>
-                                    ))}
+                                        );
+                                    })}
                                     {contactsHasMore && (
                                         <button
                                             onClick={handleLoadMoreDirect}
