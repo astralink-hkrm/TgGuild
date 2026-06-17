@@ -18,7 +18,7 @@ import {
 import { readTelegramDirectoryCache, saveTelegramDirectoryCache, readTelegramMessageCache } from './telegramCache';
 import { TelegramFolder, BandwidthStats } from '../../types';
 import { parseDate } from '../../utils';
-import { TypingUserData } from '../../hooks/useRealtime';
+import { TypingUserData, PresenceData } from '../../hooks/useRealtime';
 
 interface GroupInfo {
     id: number;
@@ -104,6 +104,7 @@ export function Sidebar({
     const [contactsLoadingMore, setContactsLoadingMore] = useState(false);
     const [lastMessages, setLastMessages] = useState<Record<string, CachedMessagePreview | null>>({});
     const [typingPeers, setTypingPeers] = useState<Record<string, TypingUserData[]>>({});
+    const [presenceData, setPresenceData] = useState<Record<string, PresenceData>>({});
 
     useEffect(() => {
         loadInitialDirectory();
@@ -312,6 +313,36 @@ export function Sidebar({
         const timer = setInterval(pollTyping, 10000);
         return () => clearInterval(timer);
     }, [groups, contacts, teamVisibility, teamsExpanded, directExpanded]);
+
+    // Poll presence for direct chats
+    useEffect(() => {
+        if (!directExpanded) return;
+        const visible = contacts.filter(c => isContactVisible(c.user_id, teamVisibility));
+        if (visible.length === 0) return;
+
+        const pollPresence = async () => {
+            const userIds = visible.map(c => Number(c.user_id)).filter(id => id > 0);
+            if (userIds.length === 0) return;
+            try {
+                const result = await invoke<PresenceData[]>('cmd_get_user_presence', { userIds });
+                if (result) {
+                    setPresenceData(prev => {
+                        const next = { ...prev };
+                        for (const p of result) {
+                            next[String(p.user_id)] = p;
+                        }
+                        return next;
+                    });
+                }
+            } catch (e) {
+                console.debug('Failed to fetch presence:', e);
+            }
+        };
+
+        pollPresence();
+        const timer = setInterval(pollPresence, 30000);
+        return () => clearInterval(timer);
+    }, [contacts, teamVisibility, directExpanded]);
 
     const formatSidebarDate = (dateStr: string): string => {
         const parsed = parseDate(dateStr);
@@ -547,12 +578,15 @@ export function Sidebar({
                                             setActiveDirectChat(null);
                                             setActiveFolderId(null);
                                         }}
-                                        className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-xs font-medium transition-all ${
+                                        className={`w-full relative flex items-center gap-3 px-3 py-2 rounded-lg text-xs font-medium transition-all ${
                                             activeGroupId === group.id
-                                                ? 'bg-telegram-primary/10 text-telegram-primary border border-telegram-primary/20'
+                                                ? 'bg-telegram-primary/[0.07] text-telegram-text'
                                                 : 'text-telegram-text hover:bg-telegram-hover'
                                         }`}
                                     >
+                                        {activeGroupId === group.id && (
+                                            <div className="absolute left-0 top-1.5 bottom-1.5 w-[3px] rounded-r-full bg-telegram-primary" />
+                                        )}
                                         <TelegramAvatar
                                             user={{ user_id: group.id, first_name: group.name, photo_url: group.photo_url }}
                                             token={streamToken}
@@ -560,20 +594,20 @@ export function Sidebar({
                                         />
                                         <div className="flex-1 text-left min-w-0">
                                             <div className="flex items-baseline gap-2">
-                                                <span className="truncate text-xs font-medium leading-5">{group.name}</span>
+                                                <span className={`truncate text-xs font-medium leading-5 ${activeGroupId === group.id ? 'text-telegram-text' : ''}`}>{group.name}</span>
                                                 {timeStr && (
                                                     <span className="text-[10px] text-telegram-subtext flex-shrink-0 ml-auto">{timeStr}</span>
                                                 )}
                                             </div>
                                             {preview !== null && (
-                                                <p className={`truncate text-[11px] leading-tight ${isTyping ? 'text-telegram-primary' : 'text-telegram-subtext'}`}>
+                                                <p className={`truncate text-[11px] leading-tight ${isTyping ? 'text-telegram-primary' : activeGroupId === group.id ? 'text-telegram-text/60' : 'text-telegram-subtext'}`}>
                                                     {preview}
                                                 </p>
                                             )}
                                         </div>
                                         <div className="flex items-center gap-1 self-start mt-0.5">
                                             {Boolean(group.unread_count) && (
-                                                <span className="h-2 w-2 rounded-full bg-telegram-primary" title={`${group.unread_count} unread`} />
+                                                <span className={`rounded-full ${activeGroupId === group.id ? 'h-2 w-2 bg-telegram-primary' : 'h-2 w-2 bg-telegram-primary'}`} title={`${group.unread_count} unread`} />
                                             )}
                                             {sortedMembers.length > 0 && (
                                                 <MemberStack members={sortedMembers} size="sm" maxDisplay={3} />
@@ -637,13 +671,21 @@ export function Sidebar({
                                                 setActiveFolderId(null);
                                                 setActiveDirectChat(contact);
                                             }}
-                                            className={`flex w-full items-center gap-3 rounded-lg px-3 py-2 text-xs font-medium transition-all ${
+                                            className={`flex w-full relative items-center gap-3 rounded-lg px-3 py-2 text-xs font-medium transition-all ${
                                                 activeDirectChatId === contact.user_id
-                                                    ? 'bg-telegram-primary/10 text-telegram-primary border border-telegram-primary/20'
+                                                    ? 'bg-telegram-primary/[0.07] text-telegram-text'
                                                     : 'text-telegram-text hover:bg-telegram-hover'
                                             }`}
                                         >
-                                            <TelegramAvatar user={contact} token={streamToken} size="sm" />
+                                            {activeDirectChatId === contact.user_id && (
+                                                <div className="absolute left-0 top-1.5 bottom-1.5 w-[3px] rounded-r-full bg-telegram-primary" />
+                                            )}
+                                            <div className="relative flex-shrink-0">
+                                                <TelegramAvatar user={contact} token={streamToken} size="sm" />
+                                                {presenceData[String(contact.user_id)]?.online && (
+                                                    <span className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-green-500 border-2 border-telegram-surface shadow-[0_0_4px_rgba(34,197,94,0.5)]" />
+                                                )}
+                                            </div>
                                             <div className="flex-1 text-left min-w-0">
                                                 <div className="flex items-baseline gap-2">
                                                     <span className="truncate text-xs font-medium leading-5">
@@ -654,7 +696,7 @@ export function Sidebar({
                                                     )}
                                                 </div>
                                                 {preview !== null && (
-                                                    <p className={`truncate text-[11px] leading-tight ${isTyping ? 'text-telegram-primary' : 'text-telegram-subtext'}`}>
+                                                    <p className={`truncate text-[11px] leading-tight ${isTyping ? 'text-telegram-primary' : activeDirectChatId === contact.user_id ? 'text-telegram-text/60' : 'text-telegram-subtext'}`}>
                                                         {preview}
                                                     </p>
                                                 )}

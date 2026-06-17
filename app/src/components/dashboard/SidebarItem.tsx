@@ -126,14 +126,17 @@ export function SidebarItem({
                 setIsOver(false);
                 if (onDrop) onDrop(e);
             }}
-            className={`group w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-all duration-150 ${active
-                ? 'bg-telegram-primary/10 text-telegram-primary'
+            className={`group w-full relative flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-all duration-150 ${active
+                ? 'bg-telegram-primary/[0.07] text-telegram-text'
                 : isOver
                     ? 'bg-telegram-primary/30 text-telegram-text ring-2 ring-telegram-primary scale-[1.02] shadow-lg'
                     : 'text-telegram-subtext hover:bg-telegram-hover hover:text-telegram-text'
                 }`}
         >
-            <Icon className={`w-4 h-4 ${isOver ? 'text-telegram-primary' : ''}`} />
+            {active && (
+                <div className="absolute left-0 top-1.5 bottom-1.5 w-[3px] rounded-r-full bg-telegram-primary" />
+            )}
+            <Icon className={`w-4 h-4 ${active ? 'text-telegram-primary' : isOver ? 'text-telegram-primary' : ''}`} />
             <span className="flex-1 text-left truncate">{label}</span>
             
             <div className="flex items-center gap-2">

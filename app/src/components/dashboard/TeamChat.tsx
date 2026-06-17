@@ -1212,19 +1212,32 @@ export function TeamChat({
                                 <span className="w-2 h-2 rounded-full bg-green-500 shadow-[0_0_6px_rgba(34,197,94,0.5)] shrink-0" />
                             )}
                         </div>
-                        <p
-                            className="text-xs text-telegram-subtext truncate cursor-pointer"
-                            onClick={() => !isDirect && setShowGroupInfoModal(true)}
-                            title={isDirect ? '' : 'View group info'}
-                        >
-                            {realtime.typingText ? (
-                                <span className="text-telegram-primary animate-pulse">{realtime.typingText}</span>
-                            ) : isDirect ? (
-                                realtime.formatLastSeen(realtime.presence[String(groupId)]) || 'direct chat'
-                            ) : (
-                                `${memberCount ?? 0} members`
-                            )}
-                        </p>
+                        {isDirect ? (
+                            <p className="text-xs text-telegram-subtext truncate cursor-pointer">
+                                {realtime.typingText ? (
+                                    <span className="text-telegram-primary animate-pulse">{realtime.typingText}</span>
+                                ) : (
+                                    realtime.formatLastSeen(realtime.presence[String(groupId)]) || 'direct chat'
+                                )}
+                            </p>
+                        ) : (
+                            <button
+                                onClick={() => setShowGroupMembersPanel(true)}
+                                className="flex items-center gap-1.5 text-xs text-telegram-subtext hover:text-telegram-text transition-colors group/sub"
+                                title="View members"
+                            >
+                                {realtime.typingText ? (
+                                    <span className="text-telegram-primary animate-pulse truncate">{realtime.typingText}</span>
+                                ) : (
+                                    <>
+                                        <Users className="w-3 h-3 group-hover/sub:text-telegram-primary transition-colors" />
+                                        <span className="group-hover/sub:underline underline-offset-2 decoration-dotted decoration-telegram-subtext/40 truncate">
+                                            {memberCount ?? 0} members
+                                        </span>
+                                    </>
+                                )}
+                            </button>
+                        )}
                     </div>
                 </div>
 
@@ -1418,13 +1431,14 @@ export function TeamChat({
                     </div>
 
                     {!isDirect && (
-                        <div className="flex items-center gap-3 ml-2 border-l border-telegram-border pl-4">
+                        <div className="flex items-center gap-2 ml-2 border-l border-telegram-border pl-3">
                             <button
                                 onClick={() => setShowGroupMembersPanel(true)}
-                                className="transition-transform hover:scale-105 active:scale-95"
+                                className="flex items-center gap-1.5 px-2 py-1 rounded-lg hover:bg-telegram-hover transition-colors active:scale-95"
                                 title="View all members"
                             >
                                 <MemberStack members={sortedMembers} size="sm" />
+                                <span className="text-[11px] font-medium text-telegram-subtext tabular-nums">{sortedMembers.length}</span>
                             </button>
                             <div className="relative">
                                 <button
