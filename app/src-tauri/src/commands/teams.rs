@@ -3174,7 +3174,11 @@ pub async fn cmd_get_user_presence(
                 _ => continue,
             }
         } else {
-            continue;
+            // Fallback: try with access_hash=0 for users not yet in peer cache
+            tl::enums::InputUser::User(tl::types::InputUser {
+                user_id,
+                access_hash: 0,
+            })
         };
 
         let user_result = client
