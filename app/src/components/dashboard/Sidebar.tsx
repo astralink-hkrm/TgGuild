@@ -674,7 +674,8 @@ export function Sidebar({
 
                                         let preview: ReactNode = null;
                                         if (isTyping) {
-                                            preview = 'typing...';
+                                            const first = typing![0];
+                                            preview = `${first.user_name} is typing...`;
                                         } else if (lastMsg) {
                                             const mediaLabel = getMediaLabel(lastMsg);
                                             const mediaIcon = getMediaIcon(lastMsg);

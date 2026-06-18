@@ -1,8 +1,13 @@
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use chrono::Utc;
+use grammers_client::client;
+use grammers_client::types::Peer;
 use grammers_client::Client;
+use grammers_client::SignInError;
 use grammers_mtsender::SenderPool;
 use grammers_session::storages::SqliteSession;
 use grammers_tl_types as tl;
+use std::collections::HashMap;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use tauri::Manager;
@@ -11,9 +16,9 @@ use tokio::sync::oneshot;
 use tokio::time::Duration;
 
 use crate::commands::utils::map_error;
+use crate::commands::TypingEntry;
 use crate::models::AuthResult;
 use crate::TelegramState;
-use grammers_client::SignInError;
 
 /// Ensures the Telegram client is initialized.
 ///
@@ -91,7 +96,7 @@ pub async fn ensure_client_initialized(
     *state.runner_shutdown.lock().unwrap() = Some(shutdown_tx);
 
     // Spawn the network runner with shutdown support
-    let SenderPool { runner, .. } = pool;
+    let SenderPool { runner, updates, .. } = pool;
     tauri::async_runtime::spawn(async move {
         tokio::select! {
             // Normal runner operation
@@ -103,6 +108,15 @@ pub async fn ensure_client_initialized(
                 log::info!("Runner #{} shutdown requested, exiting", runner_num);
             }
         }
+    });
+
+    // Spawn update handler to process incoming typing indicators and other updates
+    let update_stream = client.stream_updates(updates, Default::default());
+    let typing_store = state.typing_store.clone();
+    let peer_cache = state.peer_cache.clone();
+    let client_for_updates = client.clone();
+    tauri::async_runtime::spawn(async move {
+        process_typing_updates(client_for_updates, update_stream, typing_store, peer_cache).await;
     });
 
     *client_guard = Some(client.clone());
@@ -428,5 +442,103 @@ pub async fn cmd_auth_qr_poll(state: State<'_, TelegramState>) -> Result<AuthRes
                 error: None,
             })
         }
+    }
+}
+
+/// Background task that processes incoming Telegram updates and records typing indicators.
+async fn process_typing_updates(
+    _client: Client,
+    mut stream: client::updates::UpdateStream,
+    typing_store: Arc<tokio::sync::Mutex<HashMap<String, HashMap<String, TypingEntry>>>>,
+    peer_cache: Arc<tokio::sync::RwLock<HashMap<i64, Peer>>>,
+) {
+    use grammers_client::types::Update as GrUpdate;
+
+    loop {
+        match stream.next().await {
+            Ok(update) => {
+                let (user_id, peer_key, action_str, is_cancel) = match &update {
+                    GrUpdate::Raw(raw) => match &raw.raw {
+                        tl::enums::Update::UserTyping(data) => {
+                            let cancel = matches!(data.action, tl::enums::SendMessageAction::SendMessageCancelAction);
+                            (data.user_id, format!("peer:{}", data.user_id), action_name(&data.action), cancel)
+                        }
+                        tl::enums::Update::ChatUserTyping(data) => {
+                            let from_id = match &data.from_id {
+                                tl::enums::Peer::User(u) => u.user_id,
+                                _ => {
+                                    log::debug!("Ignoring typing from non-user peer in chat");
+                                    continue;
+                                }
+                            };
+                            let cancel = matches!(data.action, tl::enums::SendMessageAction::SendMessageCancelAction);
+                            (from_id, format!("peer:{}", data.chat_id), action_name(&data.action), cancel)
+                        }
+                        tl::enums::Update::ChannelUserTyping(data) => {
+                            let from_id = match &data.from_id {
+                                tl::enums::Peer::User(u) => u.user_id,
+                                _ => {
+                                    log::debug!("Ignoring typing from non-user peer in channel");
+                                    continue;
+                                }
+                            };
+                            let cancel = matches!(data.action, tl::enums::SendMessageAction::SendMessageCancelAction);
+                            (from_id, format!("peer:{}", data.channel_id), action_name(&data.action), cancel)
+                        }
+                        _ => continue,
+                    },
+                    _ => continue,
+                };
+
+                let mut store = typing_store.lock().await;
+                if is_cancel {
+                    if let Some(users) = store.get_mut(&peer_key) {
+                        users.remove(&user_id.to_string());
+                        if users.is_empty() {
+                            store.remove(&peer_key);
+                        }
+                    }
+                } else {
+                    let user_name = {
+                        let cache = peer_cache.read().await;
+                        cache.get(&user_id).and_then(|peer| {
+                            if let Peer::User(u) = peer {
+                                if let tl::enums::User::User(raw) = &u.raw {
+                                    let first = raw.first_name.as_deref().unwrap_or("");
+                                    let last = raw.last_name.as_deref().unwrap_or("");
+                                    let name = format!("{} {}", first, last).trim().to_string();
+                                    if !name.is_empty() { return Some(name); }
+                                }
+                            }
+                            None
+                        }).unwrap_or_else(|| format!("User {}", user_id))
+                    };
+
+                    let entry = store.entry(peer_key).or_insert_with(HashMap::new);
+                    entry.insert(
+                        user_id.to_string(),
+                        TypingEntry {
+                            user_id,
+                            user_name,
+                            action: action_str,
+                            last_updated: Utc::now().timestamp(),
+                        },
+                    );
+                }
+            }
+            Err(e) => {
+                log::error!("Update stream error: {}", e);
+                break;
+            }
+        }
+    }
+}
+
+/// Converts a SendMessageAction into a human-readable string.
+fn action_name(action: &tl::enums::SendMessageAction) -> String {
+    match action {
+        tl::enums::SendMessageAction::SendMessageTypingAction => "typing".to_string(),
+        tl::enums::SendMessageAction::SendMessageCancelAction => "cancel".to_string(),
+        _ => "typing".to_string(),
     }
 }
