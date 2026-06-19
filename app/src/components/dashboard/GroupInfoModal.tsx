@@ -31,16 +31,23 @@ export function GroupInfoModal({ groupId, groupName, onClose }: GroupInfoModalPr
     const [editDescription, setEditDescription] = useState('');
     const [saving, setSaving] = useState(false);
     const [tgguildLink, setTgguildLink] = useState<string | null>(null);
+    const [telegramLink, setTelegramLink] = useState<string | null>(null);
 
     useEffect(() => {
         invoke<TeamFullInfo>('cmd_get_team_full_info', { teamId: groupId })
             .then(data => {
                 setInfo(data);
-                // Convert Telegram link to TGGuild deep link
                 if (data.invite_link) {
-                    invoke<string>('cmd_to_tgguild_invite_link', { telegramLink: data.invite_link })
-                        .then(setTgguildLink)
-                        .catch(() => setTgguildLink(null));
+                    if (data.invite_link.startsWith('tgguild://')) {
+                        setTgguildLink(data.invite_link);
+                        const hash = data.invite_link.replace('tgguild://join/', '').split('?')[0];
+                        setTelegramLink(`https://t.me/+${hash}`);
+                    } else {
+                        setTelegramLink(data.invite_link);
+                        invoke<string>('cmd_to_tgguild_invite_link', { telegramLink: data.invite_link })
+                            .then(setTgguildLink)
+                            .catch(() => setTgguildLink(null));
+                    }
                 }
             })
             .catch((e) => toast.error(`Failed to load group info: ${e}`))
@@ -48,12 +55,12 @@ export function GroupInfoModal({ groupId, groupName, onClose }: GroupInfoModalPr
     }, [groupId]);
 
     const handleCopyLink = async () => {
-        const linkToCopy = tgguildLink || info?.invite_link;
+        const linkToCopy = telegramLink;
         if (!linkToCopy) return;
         try {
             await navigator.clipboard.writeText(linkToCopy);
             setCopied(true);
-            toast.success('Invite link copied');
+            toast.success('Telegram link copied');
             setTimeout(() => setCopied(false), 2000);
         } catch {
             toast.error('Failed to copy');
@@ -194,33 +201,31 @@ export function GroupInfoModal({ groupId, groupName, onClose }: GroupInfoModalPr
                             </div>
                         </div>
 
-                        {info.invite_link && (
+                        {tgguildLink && (
                             <div className="rounded-xl bg-telegram-hover/50 p-3 space-y-3">
                                 <p className="text-xs text-telegram-subtext">Invite Links</p>
                                 {/* TGGuild deep link — primary */}
-                                {tgguildLink && (
-                                    <div>
-                                        <p className="text-[10px] text-telegram-primary mb-1 flex items-center gap-1">
-                                            <Link className="w-3 h-3" /> TGGuild Link
-                                        </p>
-                                        <div className="flex items-center gap-2">
-                                            <input
-                                                type="text"
-                                                readOnly
-                                                value={tgguildLink}
-                                                className="flex-1 rounded-lg bg-telegram-surface border border-telegram-border px-3 py-2 text-sm text-telegram-text outline-none font-mono text-xs"
-                                                onClick={(e) => (e.target as HTMLInputElement).select()}
-                                            />
-                                            <button
-                                                onClick={handleCopyTgguildLink}
-                                                className="rounded-lg bg-telegram-primary/10 p-2 text-telegram-primary hover:bg-telegram-primary/20 transition-colors"
-                                                title="Copy TGGuild link"
-                                            >
-                                                {copiedTgguild ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
-                                            </button>
-                                        </div>
+                                <div>
+                                    <p className="text-[10px] text-telegram-primary mb-1 flex items-center gap-1">
+                                        <Link className="w-3 h-3" /> TGGuild Link
+                                    </p>
+                                    <div className="flex items-center gap-2">
+                                        <input
+                                            type="text"
+                                            readOnly
+                                            value={tgguildLink}
+                                            className="flex-1 rounded-lg bg-telegram-surface border border-telegram-border px-3 py-2 text-sm text-telegram-text outline-none font-mono text-xs"
+                                            onClick={(e) => (e.target as HTMLInputElement).select()}
+                                        />
+                                        <button
+                                            onClick={handleCopyTgguildLink}
+                                            className="rounded-lg bg-telegram-primary/10 p-2 text-telegram-primary hover:bg-telegram-primary/20 transition-colors"
+                                            title="Copy TGGuild link"
+                                        >
+                                            {copiedTgguild ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+                                        </button>
                                     </div>
-                                )}
+                                </div>
                                 {/* Telegram link */}
                                 <div>
                                     <p className="text-[10px] text-telegram-subtext mb-1">Telegram Link</p>
@@ -228,7 +233,7 @@ export function GroupInfoModal({ groupId, groupName, onClose }: GroupInfoModalPr
                                         <input
                                             type="text"
                                             readOnly
-                                            value={info.invite_link}
+                                            value={telegramLink || info?.invite_link || ''}
                                             className="flex-1 rounded-lg bg-telegram-surface border border-telegram-border px-3 py-2 text-sm text-telegram-text outline-none"
                                             onClick={(e) => (e.target as HTMLInputElement).select()}
                                         />
