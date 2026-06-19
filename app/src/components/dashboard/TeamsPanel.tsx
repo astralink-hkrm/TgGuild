@@ -14,6 +14,7 @@ import {
     TeamVisibilitySettings,
 } from './teamVisibility';
 import { readTelegramDirectoryCache, saveTelegramDirectoryCache } from './telegramCache';
+import { GROUP_JOINED_EVENT, GroupJoinedEventDetail } from '../../events/groupEvents';
 
 interface TeamInfo {
     id: number;
@@ -111,6 +112,43 @@ export function TeamsPanel({ onGroupCreated }: TeamsPanelProps) {
             window.removeEventListener('storage', handleVisibilityChange);
         };
     }, []);
+
+    // React to group_joined event: refresh list and switch to the new group
+    useEffect(() => {
+        const handler = (e: Event) => {
+            const detail = (e as CustomEvent<GroupJoinedEventDetail>).detail;
+            if (!detail?.groupId) return;
+
+            // Optimistically add the group so it appears instantly
+            setTeams(prev => {
+                if (prev.some(t => t.id === detail.groupId)) return prev;
+                const newTeam: TeamInfo = {
+                    id: detail.groupId,
+                    name: detail.groupName,
+                    username: null,
+                    member_count: 0,
+                    is_channel: false,
+                    is_supergroup: false,
+                    photo_url: null,
+                };
+                return [newTeam, ...prev];
+            });
+
+            // Full refresh from Telegram
+            invoke<{ teams: TeamInfo[] }>('cmd_get_teams')
+                .then(resp => {
+                    setTeams(resp.teams);
+                    saveTelegramDirectoryCache(currentUserId, resp.teams, contacts);
+                    // Switch to the joined group
+                    const joined = resp.teams.find(t => t.id === detail.groupId);
+                    if (joined) selectGroup(joined);
+                })
+                .catch(console.error);
+        };
+
+        window.addEventListener(GROUP_JOINED_EVENT, handler);
+        return () => window.removeEventListener(GROUP_JOINED_EVENT, handler);
+    }, [currentUserId, contacts]);
 
     useEffect(() => {
         if (!selectedChat) return;

@@ -1,6 +1,11 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": ["tgguild"]
+      }
+    },
     "updater": {
       "endpoints": [
         "https://github.com/caamer20/Telegram-Drive/releases/latest/download/latest.json"

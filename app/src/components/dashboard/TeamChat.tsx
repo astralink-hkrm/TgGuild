@@ -2072,7 +2072,10 @@ export function TeamChat({
                         <p className="text-sm text-telegram-subtext leading-relaxed mb-4">
                             Choose how to delete this message.
                         </p>
-                        {showDeleteConfirm.outgoing && (
+                        {/* Show "Delete for everyone" when:
+                            - it's your own message (outgoing), OR
+                            - you are an admin/owner in a group (can remove anyone's message) */}
+                        {(showDeleteConfirm.outgoing || (!isDirect && canManageMembers)) && (
                             <label className="flex items-center gap-3 rounded-xl bg-telegram-hover/50 px-3 py-2.5 mb-2 cursor-pointer hover:bg-telegram-hover transition-colors">
                                 <input
                                     type="checkbox"

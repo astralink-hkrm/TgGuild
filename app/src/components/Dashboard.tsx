@@ -33,14 +33,18 @@ import { useFileOperations } from '../hooks/useFileOperations';
 import { useFileUpload } from '../hooks/useFileUpload';
 import { useFileDownload } from '../hooks/useFileDownload';
 import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
+import { GROUP_JOINED_EVENT, GroupJoinedEventDetail } from '../events/groupEvents';
 
 interface DashboardProps {
     onLogout: () => void;
     showWorkspaceSetup?: boolean;
     onWorkspaceSetupComplete?: () => void;
+    /** When set, automatically open this group in the chat view */
+    pendingGroupOpen?: { id: number; name: string } | null;
+    onPendingGroupOpenConsumed?: () => void;
 }
 
-export function Dashboard({ onLogout, showWorkspaceSetup = false, onWorkspaceSetupComplete }: DashboardProps) {
+export function Dashboard({ onLogout, showWorkspaceSetup = false, onWorkspaceSetupComplete, pendingGroupOpen, onPendingGroupOpenConsumed }: DashboardProps) {
     const queryClient = useQueryClient();
 
     const {
@@ -135,6 +139,43 @@ export function Dashboard({ onLogout, showWorkspaceSetup = false, onWorkspaceSet
         invoke<{ user_id: string } | null>('cmd_get_current_user')
             .then((user) => setCurrentUserId(user?.user_id || null))
             .catch(console.error);
+    }, []);
+
+    // Handle pending group open after invite join
+    useEffect(() => {
+        if (!pendingGroupOpen) return;
+        const { id, name } = pendingGroupOpen;
+        // Ensure the group is in our local list
+        setGroups(prev => {
+            const exists = prev.some(g => g.id === id);
+            if (exists) return prev;
+            return [{ id, name, username: null, member_count: 0, photo_url: null }, ...prev];
+        });
+        setActiveGroupId(id);
+        setActiveFolderId(null);
+        setActiveCompanyManagement(false);
+        setActiveDirectChat(null);
+        onPendingGroupOpenConsumed?.();
+    }, [pendingGroupOpen]);
+
+    // Listen for group_joined events (from invite join flow) to refresh state without reload
+    useEffect(() => {
+        const handler = (e: Event) => {
+            const detail = (e as CustomEvent<GroupJoinedEventDetail>).detail;
+            if (!detail?.groupId) return;
+
+            // Refresh the groups list to pick up the new group
+            loadGroups().then(() => {
+                // Switch to the newly joined group
+                setActiveGroupId(detail.groupId);
+                setActiveFolderId(null);
+                setActiveCompanyManagement(false);
+                setActiveDirectChat(null);
+            });
+        };
+
+        window.addEventListener(GROUP_JOINED_EVENT, handler);
+        return () => window.removeEventListener(GROUP_JOINED_EVENT, handler);
     }, []);
 
     useEffect(() => {

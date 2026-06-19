@@ -24,6 +24,7 @@
     "fs:allow-appdata-meta-recursive",
     "fs:allow-temp-read-recursive",
     "fs:allow-temp-write-recursive",
-    "updater:default"
+    "updater:default",
+    "deep-link:default"
   ]
 }
