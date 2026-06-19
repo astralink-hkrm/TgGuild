@@ -2670,49 +2670,53 @@ pub async fn cmd_delete_messages(
 
     match &peer {
         Peer::Channel(c) => {
-            // Channels and supergroups — channels.DeleteMessages always removes
-            // the messages for everyone (no separate revoke concept for admins).
-            let input_channel = tl::enums::InputChannel::Channel(tl::types::InputChannel {
-                channel_id: c.raw.id,
-                access_hash: c.raw.access_hash.ok_or("No access hash for channel")?,
-            });
+            if revoke {
+                let input_channel = tl::enums::InputChannel::Channel(tl::types::InputChannel {
+                    channel_id: c.raw.id,
+                    access_hash: c.raw.access_hash.ok_or("No access hash for channel")?,
+                });
 
-            client
-                .invoke(&tl::functions::channels::DeleteMessages {
-                    channel: input_channel,
-                    id: message_ids,
-                })
-                .await
-                .map_err(|e| {
-                    let msg = format!("Failed to delete for everyone in channel: {}", e);
-                    eprintln!("[cmd_delete_messages] ERROR: {}", msg);
-                    msg
-                })?;
+                client
+                    .invoke(&tl::functions::channels::DeleteMessages {
+                        channel: input_channel,
+                        id: message_ids,
+                    })
+                    .await
+                    .map_err(|e| {
+                        let msg = format!("Failed to delete for everyone in channel: {}", e);
+                        eprintln!("[cmd_delete_messages] ERROR: {}", msg);
+                        msg
+                    })?;
+            } else {
+                println!("[cmd_delete_messages] Skipping API call (revoke=false, local-only delete)");
+            }
         }
         Peer::Group(g) => {
             match &g.raw {
                 tl::enums::Chat::Channel(channel) => {
-                    // Supergroup stored as Group peer — use channels.DeleteMessages
-                    let input_channel = tl::enums::InputChannel::Channel(tl::types::InputChannel {
-                        channel_id: channel.id,
-                        access_hash: channel.access_hash.ok_or("No access hash for supergroup")?,
-                    });
+                    if revoke {
+                        let input_channel = tl::enums::InputChannel::Channel(tl::types::InputChannel {
+                            channel_id: channel.id,
+                            access_hash: channel.access_hash.ok_or("No access hash for supergroup")?,
+                        });
 
-                    client
-                        .invoke(&tl::functions::channels::DeleteMessages {
-                            channel: input_channel,
-                            id: message_ids,
-                        })
-                        .await
-                        .map_err(|e| {
-                            let msg = format!("Failed to delete for everyone in supergroup: {}", e);
-                            eprintln!("[cmd_delete_messages] ERROR: {}", msg);
-                            msg
-                        })?;
+                        client
+                            .invoke(&tl::functions::channels::DeleteMessages {
+                                channel: input_channel,
+                                id: message_ids,
+                            })
+                            .await
+                            .map_err(|e| {
+                                let msg = format!("Failed to delete for everyone in supergroup: {}", e);
+                                eprintln!("[cmd_delete_messages] ERROR: {}", msg);
+                                msg
+                            })?;
+                    } else {
+                        println!("[cmd_delete_messages] Skipping API call (revoke=false, local-only delete)");
+                    }
                 }
                 tl::enums::Chat::Chat(_) => {
-                    // Legacy basic group — messages.DeleteMessages with revoke=true
-                    // removes the message for everyone.
+                    // Legacy basic group — messages.DeleteMessages respects revoke
                     client
                         .invoke(&tl::functions::messages::DeleteMessages {
                             id: message_ids,
@@ -2731,8 +2735,7 @@ pub async fn cmd_delete_messages(
             }
         }
         Peer::User(_) => {
-            // Direct / private chat — messages.DeleteMessages with revoke=true
-            // deletes the message for both parties.
+            // Direct / private chat — messages.DeleteMessages respects revoke
             client
                 .invoke(&tl::functions::messages::DeleteMessages {
                     id: message_ids,
