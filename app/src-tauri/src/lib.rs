@@ -8,7 +8,7 @@ use commands::TelegramState;
 use rand::Rng;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 use tokio::sync::Mutex;
 
 pub mod server;
@@ -50,6 +50,7 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_window_state::Builder::default().build())
+        .plugin(tauri_plugin_deep_link::init())
         .setup(move |app| {
             app.manage(tauri::async_runtime::block_on(
                 crate::commands::google::initialize_google_state(),
@@ -83,13 +84,35 @@ pub fn run() {
                         Ok(server) => {
                             // Store the handle so RunEvent::Exit can stop it
                             *handle_for_thread.lock().unwrap() = Some(server.handle());
-                            // Now await the server — blocks until stopped
+                            // Now await the server — blocks until stops
                             server.await.ok();
                         }
                         Err(e) => log::error!("Streaming server failed: {}", e),
                     }
                 });
             });
+
+            // Register tgguild:// deep link scheme (works on Windows/Linux in dev and installed)
+            #[cfg(any(windows, target_os = "linux"))]
+            {
+                use tauri_plugin_deep_link::DeepLinkExt;
+                if let Err(e) = app.deep_link().register_all() {
+                    log::warn!("Failed to register deep link schemes: {}", e);
+                }
+            }
+
+            // Forward incoming deep links to the frontend as a Tauri event
+            {
+                use tauri_plugin_deep_link::DeepLinkExt;
+                let app_handle_clone = app.handle().clone();
+                app.deep_link().on_open_url(move |event| {
+                    let urls: Vec<String> = event.urls().iter().map(|u| u.to_string()).collect();
+                    log::info!("Deep link received: {:?}", urls);
+                    for url in &urls {
+                        let _ = app_handle_clone.emit("deep-link-received", url.clone());
+                    }
+                });
+            }
 
             Ok(())
         })
@@ -178,6 +201,10 @@ pub fn run() {
             commands::cmd_unstar_message,
             commands::cmd_get_starred_messages,
             commands::cmd_is_message_starred,
+            commands::cmd_resolve_invite_link,
+            commands::cmd_join_group_by_invite,
+            commands::cmd_to_tgguild_invite_link,
+            commands::cmd_get_tgguild_invite_link,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

@@ -7,13 +7,16 @@ import { Dashboard } from "./components/Dashboard";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { WindowControls } from "./components/WindowControls";
 import { motion, AnimatePresence } from "framer-motion";
-import { loadWorkspacePrefs } from "./components/dashboard/workspaceVisibility";
+import { loadWorkspacePrefs, saveWorkspacePrefs } from "./components/dashboard/workspaceVisibility";
 import "./App.css";
 
 import { Toaster, toast } from "sonner";
 import { ConfirmProvider } from "./context/ConfirmContext";
 import { ThemeProvider, useTheme } from "./context/ThemeContext";
 import { DropZoneProvider } from "./contexts/DropZoneContext";
+import { useInviteLink } from "./hooks/useInviteLink";
+import { InviteJoinModal } from "./components/dashboard/InviteJoinModal";
+import { NewGroupVisibilityPrompt } from "./components/dashboard/NewGroupVisibilityPrompt";
 
 const queryClient = new QueryClient();
 
@@ -28,20 +31,12 @@ function LoadingScreen() {
       >
         <div className="w-24 h-24 mb-8 relative">
           <motion.div
-            animate={{ 
-              scale: [1, 1.1, 1],
-              opacity: [0.5, 1, 0.5]
-            }}
-            transition={{ 
-              duration: 2,
-              repeat: Infinity,
-              ease: "easeInOut"
-            }}
+            animate={{ scale: [1, 1.1, 1], opacity: [0.5, 1, 0.5] }}
+            transition={{ duration: 2, repeat: Infinity, ease: "easeInOut" }}
             className="absolute inset-0 bg-blue-500/30 rounded-full blur-2xl"
           />
           <img src="/logo.png" alt="TgGuild" className="w-full h-full relative z-10 filter drop-shadow-2xl rounded-full" />
         </div>
-        
         <h1 className="text-2xl font-bold text-white mb-2 tracking-tight">TgGuild</h1>
         <div className="flex items-center gap-2 text-blue-300/60 font-medium text-sm">
           <motion.div
@@ -52,8 +47,6 @@ function LoadingScreen() {
           Initializing Workspace...
         </div>
       </motion.div>
-
-      {/* Background blobs */}
       <div className="fixed top-[-20%] left-[-10%] w-[500px] h-[500px] bg-blue-600/20 rounded-full blur-[120px] pointer-events-none" />
       <div className="fixed bottom-[-10%] right-[-10%] w-[400px] h-[400px] bg-purple-600/10 rounded-full blur-[100px] pointer-events-none" />
     </div>
@@ -64,9 +57,16 @@ function AppContent() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [isCheckingAuth, setIsCheckingAuth] = useState(true);
   const [showWorkspaceSetup, setShowWorkspaceSetup] = useState(false);
+  // Set after a successful join — tells Dashboard to open that group
+  const [pendingGroupOpen, setPendingGroupOpen] = useState<{ id: number; name: string } | null>(null);
+  // Set when performanceMode is on and user needs to decide visibility
+  const [visibilityPrompt, setVisibilityPrompt] = useState<{ id: number; name: string } | null>(null);
   const { theme } = useTheme();
   const oauthHandled = useRef(false);
 
+  const { pendingInvite, clearPendingInvite } = useInviteLink(isAuthenticated);
+
+  // Handle Google OAuth redirect
   useEffect(() => {
     if (oauthHandled.current) return;
     const params = new URLSearchParams(window.location.search);
@@ -86,22 +86,19 @@ function AppContent() {
     }
   }, []);
 
+  // Check auth on startup
   useEffect(() => {
     const checkAuth = async () => {
       try {
         const store = await load("config.json");
         const apiIdStr = await store.get<string>("api_id");
-        
         if (apiIdStr) {
           const apiId = parseInt(apiIdStr);
           if (!isNaN(apiId)) {
-            // First connect with the saved ID
             await invoke("cmd_connect", { apiId });
-            // Then check if we are actually authorized (session is valid)
             const isAuthorized = await invoke<boolean>("cmd_check_connection");
             if (isAuthorized) {
               setIsAuthenticated(true);
-              // Check workspace setup status
               const prefs = await loadWorkspacePrefs();
               if (!prefs.firstRunCompleted) {
                 setShowWorkspaceSetup(true);
@@ -112,13 +109,42 @@ function AppContent() {
       } catch (error) {
         console.error("Auth check failed:", error);
       } finally {
-        // Short delay to ensure a smooth transition even on fast connections
         setTimeout(() => setIsCheckingAuth(false), 800);
       }
     };
-
     checkAuth();
   }, []);
+
+  // Handle workspace visibility decision for a newly joined group
+  const handleVisibilityShow = async () => {
+    if (!visibilityPrompt) return;
+    try {
+      const prefs = await loadWorkspacePrefs();
+      if (!prefs.visibleGroups.includes(visibilityPrompt.id)) {
+        await saveWorkspacePrefs({
+          ...prefs,
+          visibleGroups: [...prefs.visibleGroups, visibilityPrompt.id],
+        });
+      }
+    } catch { /* non-fatal */ }
+    setPendingGroupOpen(visibilityPrompt);
+    setVisibilityPrompt(null);
+  };
+
+  const handleVisibilityHide = async () => {
+    if (!visibilityPrompt) return;
+    try {
+      const prefs = await loadWorkspacePrefs();
+      // Remove from visible list if it was added optimistically
+      await saveWorkspacePrefs({
+        ...prefs,
+        visibleGroups: prefs.visibleGroups.filter(id => id !== visibilityPrompt.id),
+      });
+    } catch { /* non-fatal */ }
+    // Still open the group in this session (user can choose later in settings)
+    setPendingGroupOpen(visibilityPrompt);
+    setVisibilityPrompt(null);
+  };
 
   return (
     <main className="h-screen w-screen text-telegram-text overflow-hidden selection:bg-telegram-primary/30 relative flex flex-col bg-telegram-bg">
@@ -132,39 +158,51 @@ function AppContent() {
 
       <div className="min-h-0 flex-1 relative overflow-hidden">
         <Toaster theme={theme} position="bottom-center" />
+
+        {/* Invite join modal */}
+        {pendingInvite && isAuthenticated && (
+          <InviteJoinModal
+            inviteUrl={pendingInvite.url}
+            groupInfo={pendingInvite.groupInfo}
+            onClose={clearPendingInvite}
+            onJoined={(groupId, groupName) => {
+              clearPendingInvite();
+              toast.success(`Successfully joined ${groupName}`);
+              setPendingGroupOpen({ id: groupId, name: groupName });
+            }}
+            onNeedsVisibilityDecision={(groupId, groupName) => {
+              clearPendingInvite();
+              setVisibilityPrompt({ id: groupId, name: groupName });
+            }}
+          />
+        )}
+
+        {/* Workspace visibility prompt after join (only when performanceMode is on) */}
+        {visibilityPrompt && (
+          <NewGroupVisibilityPrompt
+            groupName={visibilityPrompt.name}
+            onShow={handleVisibilityShow}
+            onHide={handleVisibilityHide}
+          />
+        )}
+
         <AnimatePresence mode="wait">
           {isCheckingAuth ? (
-            <motion.div
-              key="loading"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              className="h-full w-full"
-            >
+            <motion.div key="loading" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="h-full w-full">
               <LoadingScreen />
             </motion.div>
           ) : isAuthenticated ? (
-            <motion.div
-              key="dashboard"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              className="h-full w-full"
-            >
+            <motion.div key="dashboard" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="h-full w-full">
               <Dashboard
                 onLogout={() => setIsAuthenticated(false)}
                 showWorkspaceSetup={showWorkspaceSetup}
                 onWorkspaceSetupComplete={() => setShowWorkspaceSetup(false)}
+                pendingGroupOpen={pendingGroupOpen}
+                onPendingGroupOpenConsumed={() => setPendingGroupOpen(null)}
               />
             </motion.div>
           ) : (
-            <motion.div
-              key="auth"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              className="h-full w-full"
-            >
+            <motion.div key="auth" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="h-full w-full">
               <AuthWizard onLogin={() => setIsAuthenticated(true)} />
             </motion.div>
           )}
@@ -173,7 +211,6 @@ function AppContent() {
     </main>
   );
 }
-
 
 function App() {
   return (

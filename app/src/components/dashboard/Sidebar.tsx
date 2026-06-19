@@ -20,6 +20,7 @@ import { readTelegramDirectoryCache, saveTelegramDirectoryCache, readTelegramMes
 import { TelegramFolder, BandwidthStats } from '../../types';
 import { parseDate } from '../../utils';
 import { TypingUserData, PresenceData } from '../../hooks/useRealtime';
+import { GROUP_JOINED_EVENT, GroupJoinedEventDetail } from '../../events/groupEvents';
 
 interface GroupInfo {
     id: number;
@@ -116,6 +117,42 @@ export function Sidebar({
         invoke<string>('cmd_get_stream_token').then(setStreamToken).catch(console.error);
         loadWorkspacePrefs().then(setWorkspacePrefs);
     }, []);
+
+    // Refresh sidebar when a group is joined elsewhere (e.g. via invite link)
+    useEffect(() => {
+        const handler = (e: Event) => {
+            const detail = (e as CustomEvent<GroupJoinedEventDetail>).detail;
+            if (!detail?.groupId) return;
+
+            // Add the group optimistically if not already present, then do a full refresh
+            setGroups(prev => {
+                const exists = prev.some(g => g.id === detail.groupId);
+                if (exists) return prev;
+                return [
+                    {
+                        id: detail.groupId,
+                        name: detail.groupName,
+                        username: null,
+                        member_count: 0,
+                        unread_count: 0,
+                        photo_url: null,
+                    },
+                    ...prev,
+                ];
+            });
+
+            // Refresh from Telegram to get accurate data
+            invoke<{ teams: GroupInfo[] }>('cmd_get_teams')
+                .then(resp => {
+                    setGroups(resp.teams);
+                    saveTelegramDirectoryCache(currentUser?.user_id || null, resp.teams, contacts);
+                })
+                .catch(console.error);
+        };
+
+        window.addEventListener(GROUP_JOINED_EVENT, handler);
+        return () => window.removeEventListener(GROUP_JOINED_EVENT, handler);
+    }, [contacts, currentUser]);
 
     const loadInitialDirectory = async () => {
         try {

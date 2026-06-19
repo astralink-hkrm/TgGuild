@@ -1,6 +1,13 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": [
+          "tgguild"
+        ]
+      }
+    },
     "updater": {
       "endpoints": [
         "https://github.com/caamer20/Telegram-Drive/releases/latest/download/latest.json"
@@ -9,7 +16,7 @@
     }
   },
   "productName": "TgGuild",
-  "version": "1.3.50",
+  "version": "1.3.51",
   "identifier": "com.tgguild.app",
   "build": {
     "beforeDevCommand": "npm run dev",

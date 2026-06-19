@@ -2657,23 +2657,95 @@ pub async fn cmd_delete_messages(
         return Ok(false);
     }
     let client = client_opt.unwrap();
-    let _peer = resolve_peer(&client, team_id, &state.peer_cache).await?;
 
     let label = if revoke { "Delete for everyone" } else { "Delete for me" };
     let msg_count = message_ids.len();
     println!("[cmd_delete_messages] {}: {} msgs", label, msg_count);
 
-    client
-        .invoke(&tl::functions::messages::DeleteMessages {
-            id: message_ids,
-            revoke,
-        })
-        .await
-        .map_err(|e| {
-            let msg = format!("Failed to {}: {}", label.to_lowercase(), e);
-            eprintln!("[cmd_delete_messages] ERROR: {}", msg);
-            msg
-        })?;
+    // Resolve the peer so we can choose the right TL function.
+    // For channels / supergroups we must use channels.DeleteMessages — the
+    // messages.DeleteMessages method simply ignores the `revoke` flag there
+    // and only removes the message from the caller's view.
+    let peer = resolve_peer(&client, team_id, &state.peer_cache).await?;
+
+    match &peer {
+        Peer::Channel(c) => {
+            // Channels and supergroups — channels.DeleteMessages always removes
+            // the messages for everyone (no separate revoke concept for admins).
+            let input_channel = tl::enums::InputChannel::Channel(tl::types::InputChannel {
+                channel_id: c.raw.id,
+                access_hash: c.raw.access_hash.ok_or("No access hash for channel")?,
+            });
+
+            client
+                .invoke(&tl::functions::channels::DeleteMessages {
+                    channel: input_channel,
+                    id: message_ids,
+                })
+                .await
+                .map_err(|e| {
+                    let msg = format!("Failed to delete for everyone in channel: {}", e);
+                    eprintln!("[cmd_delete_messages] ERROR: {}", msg);
+                    msg
+                })?;
+        }
+        Peer::Group(g) => {
+            match &g.raw {
+                tl::enums::Chat::Channel(channel) => {
+                    // Supergroup stored as Group peer — use channels.DeleteMessages
+                    let input_channel = tl::enums::InputChannel::Channel(tl::types::InputChannel {
+                        channel_id: channel.id,
+                        access_hash: channel.access_hash.ok_or("No access hash for supergroup")?,
+                    });
+
+                    client
+                        .invoke(&tl::functions::channels::DeleteMessages {
+                            channel: input_channel,
+                            id: message_ids,
+                        })
+                        .await
+                        .map_err(|e| {
+                            let msg = format!("Failed to delete for everyone in supergroup: {}", e);
+                            eprintln!("[cmd_delete_messages] ERROR: {}", msg);
+                            msg
+                        })?;
+                }
+                tl::enums::Chat::Chat(_) => {
+                    // Legacy basic group — messages.DeleteMessages with revoke=true
+                    // removes the message for everyone.
+                    client
+                        .invoke(&tl::functions::messages::DeleteMessages {
+                            id: message_ids,
+                            revoke,
+                        })
+                        .await
+                        .map_err(|e| {
+                            let msg = format!("Failed to {}: {}", label.to_lowercase(), e);
+                            eprintln!("[cmd_delete_messages] ERROR: {}", msg);
+                            msg
+                        })?;
+                }
+                _ => {
+                    return Err("Unsupported group type for message deletion".to_string());
+                }
+            }
+        }
+        Peer::User(_) => {
+            // Direct / private chat — messages.DeleteMessages with revoke=true
+            // deletes the message for both parties.
+            client
+                .invoke(&tl::functions::messages::DeleteMessages {
+                    id: message_ids,
+                    revoke,
+                })
+                .await
+                .map_err(|e| {
+                    let msg = format!("Failed to {}: {}", label.to_lowercase(), e);
+                    eprintln!("[cmd_delete_messages] ERROR: {}", msg);
+                    msg
+                })?;
+        }
+    }
 
     println!("[cmd_delete_messages] Success: {} msgs {}", label, msg_count);
     Ok(true)
@@ -3466,6 +3538,222 @@ pub async fn cmd_forward_messages(
     }
 
     Ok(true)
+}
+
+// ========================
+// INVITE LINK HANDLING
+// ========================
+
+/// Information about a group that can be joined via an invite link.
+#[derive(Clone, serde::Serialize)]
+pub struct InviteGroupInfo {
+    pub group_name: String,
+    pub member_count: i32,
+    pub is_channel: bool,
+    pub is_supergroup: bool,
+    /// The raw hash extracted from the invite link (e.g. "abc123" from t.me/+abc123)
+    pub invite_hash: String,
+}
+
+/// Extract the invite hash from a `t.me/+xxx`, `tgguild://join/xxx`, or `https://invite.tgguild.app/join/xxx` URL.
+fn extract_invite_hash(url: &str) -> Option<String> {
+    let url = url.trim();
+
+    // tgguild://join/<hash>
+    if let Some(rest) = url.strip_prefix("tgguild://join/") {
+        let hash = rest.split('?').next().unwrap_or(rest).trim_end_matches('/');
+        if !hash.is_empty() {
+            return Some(hash.to_string());
+        }
+    }
+
+    // https://invite.tgguild.app/join/<hash>
+    if let Some(rest) = url.strip_prefix("https://invite.tgguild.app/join/") {
+        let hash = rest.split('?').next().unwrap_or(rest).trim_end_matches('/');
+        if !hash.is_empty() {
+            return Some(hash.to_string());
+        }
+    }
+
+    // https://t.me/+<hash> or t.me/+<hash>
+    let cleaned = url
+        .trim_start_matches("https://")
+        .trim_start_matches("http://");
+    if let Some(rest) = cleaned.strip_prefix("t.me/+") {
+        let hash = rest.split('?').next().unwrap_or(rest).trim_end_matches('/');
+        if !hash.is_empty() {
+            return Some(hash.to_string());
+        }
+    }
+
+    None
+}
+
+/// Resolve an invite link and return group preview information without joining.
+#[tauri::command]
+pub async fn cmd_resolve_invite_link(
+    url: String,
+    state: State<'_, TelegramState>,
+) -> Result<InviteGroupInfo, String> {
+    let hash = extract_invite_hash(&url)
+        .ok_or_else(|| format!("Invalid invite URL: {}", url))?;
+
+    let client_opt = state.client.lock().await.clone();
+    let client = client_opt.ok_or("Not connected")?;
+
+    let result = client
+        .invoke(&tl::functions::messages::CheckChatInvite {
+            hash: hash.clone(),
+        })
+        .await
+        .map_err(|e| format!("Failed to resolve invite link: {}", e))?;
+
+    match result {
+        tl::enums::ChatInvite::Already(already) => {
+            // User is already a member
+            let (name, member_count, is_channel, is_supergroup) = match &already.chat {
+                tl::enums::Chat::Chat(c) => (c.title.clone(), c.participants_count, false, false),
+                tl::enums::Chat::Channel(c) => (
+                    c.title.clone(),
+                    c.participants_count.unwrap_or(0),
+                    c.broadcast,
+                    c.megagroup,
+                ),
+                _ => ("Unknown Group".to_string(), 0, false, false),
+            };
+            Ok(InviteGroupInfo {
+                group_name: name,
+                member_count,
+                is_channel,
+                is_supergroup,
+                invite_hash: hash,
+            })
+        }
+        tl::enums::ChatInvite::Invite(invite) => {
+            Ok(InviteGroupInfo {
+                group_name: invite.title.clone(),
+                member_count: invite.participants_count,
+                is_channel: invite.channel,
+                is_supergroup: invite.megagroup,
+                invite_hash: hash,
+            })
+        }
+        tl::enums::ChatInvite::Peek(peek) => {
+            let (name, member_count, is_channel, is_supergroup) = match &peek.chat {
+                tl::enums::Chat::Chat(c) => (c.title.clone(), c.participants_count, false, false),
+                tl::enums::Chat::Channel(c) => (
+                    c.title.clone(),
+                    c.participants_count.unwrap_or(0),
+                    c.broadcast,
+                    c.megagroup,
+                ),
+                _ => ("Unknown Group".to_string(), 0, false, false),
+            };
+            Ok(InviteGroupInfo {
+                group_name: name,
+                member_count,
+                is_channel,
+                is_supergroup,
+                invite_hash: hash,
+            })
+        }
+    }
+}
+
+/// Join a group using an invite link hash. Returns the numeric group ID on success.
+#[tauri::command]
+pub async fn cmd_join_group_by_invite(
+    invite_hash: String,
+    state: State<'_, TelegramState>,
+) -> Result<i64, String> {
+    let client_opt = state.client.lock().await.clone();
+    let client = client_opt.ok_or("Not connected")?;
+
+    let result = client
+        .invoke(&tl::functions::messages::ImportChatInvite {
+            hash: invite_hash.clone(),
+        })
+        .await
+        .map_err(|e| format!("Failed to join group: {}", e))?;
+
+    // Extract the group/channel ID from the updates
+    let chat_id = match &result {
+        tl::enums::Updates::Updates(u) => {
+            u.chats.first().map(|chat| match chat {
+                tl::enums::Chat::Chat(c) => c.id,
+                tl::enums::Chat::Channel(c) => c.id,
+                _ => 0,
+            })
+        }
+        _ => None,
+    };
+
+    // Re-populate peer cache for the joined group so subsequent commands can use it
+    if let Some(id) = chat_id {
+        if let tl::enums::Updates::Updates(u) = &result {
+            if let Some(chat) = u.chats.first() {
+                let peer = match chat {
+                    tl::enums::Chat::Chat(_) => {
+                        resolve_peer(&client, Some(id), &state.peer_cache).await.ok()
+                    }
+                    tl::enums::Chat::Channel(_) => {
+                        resolve_peer(&client, Some(id), &state.peer_cache).await.ok()
+                    }
+                    _ => None,
+                };
+                // peer_cache is updated inside resolve_peer; nothing more needed
+                let _ = peer;
+            }
+        }
+    }
+
+    Ok(chat_id.unwrap_or(0))
+}
+
+/// Convert a Telegram t.me/+xxx invite link to the TGGuild deep link format.
+#[tauri::command]
+pub fn cmd_to_tgguild_invite_link(telegram_link: String) -> Result<String, String> {
+    let hash = extract_invite_hash(&telegram_link)
+        .ok_or_else(|| format!("Not a recognized invite link: {}", telegram_link))?;
+    Ok(format!("tgguild://join/{}", hash))
+}
+
+/// Generate a TGGuild invite link for a group (creates a new Telegram invite and converts it).
+#[tauri::command]
+pub async fn cmd_get_tgguild_invite_link(
+    team_id: i64,
+    state: State<'_, TelegramState>,
+) -> Result<String, String> {
+    let client_opt = state.client.lock().await.clone();
+    let client = client_opt.ok_or("Not connected")?;
+
+    let peer = resolve_peer(&client, Some(team_id), &state.peer_cache).await?;
+    let input_peer = peer_to_input_peer(&peer)?;
+
+    let exported = client
+        .invoke(&tl::functions::messages::ExportChatInvite {
+            legacy_revoke_permanent: false,
+            request_needed: false,
+            peer: input_peer,
+            expire_date: None,
+            usage_limit: None,
+            title: Some("TgGuild invite".to_string()),
+            subscription_pricing: None,
+        })
+        .await
+        .map_err(|e| format!("Failed to create invite link: {}", e))?;
+
+    let telegram_link = match exported {
+        tl::enums::ExportedChatInvite::ChatInviteExported(invite) => invite.link,
+        tl::enums::ExportedChatInvite::ChatInvitePublicJoinRequests => {
+            return Err("Group requires join approval.".to_string());
+        }
+    };
+
+    let hash = extract_invite_hash(&telegram_link)
+        .ok_or_else(|| format!("Unexpected invite link format: {}", telegram_link))?;
+
+    Ok(format!("tgguild://join/{}", hash))
 }
 
 fn star_file_path(app_handle: &tauri::AppHandle) -> std::path::PathBuf {
