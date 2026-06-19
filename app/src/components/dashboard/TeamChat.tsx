@@ -425,7 +425,11 @@ export function TeamChat({
             setHasOlderMessages(result.has_more);
             setMessages((current) => {
                 const pending = current.filter(message => message.pending);
-                return mergeMessages(current.filter(message => !message.pending), [...latestMessages, ...pending]);
+                const deletedIdsForPeer = new Set(deletedMessageIds[activePeerKey] || []);
+                const visibleLatest = deletedIdsForPeer.size > 0
+                    ? latestMessages.filter(m => !deletedIdsForPeer.has(m.id))
+                    : latestMessages;
+                return mergeMessages(current.filter(message => !message.pending), [...visibleLatest, ...pending]);
             });
             if (shouldStickToBottom) {
                 scrollToBottom(forceScroll ? 'auto' : 'smooth');
