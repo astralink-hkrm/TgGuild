@@ -338,7 +338,7 @@ export function Sidebar({
         };
 
         pollTyping();
-        const timer = setInterval(pollTyping, 10000);
+        const timer = setInterval(pollTyping, 3000);
         return () => clearInterval(timer);
     }, [groups, contacts, workspacePrefs, teamsExpanded, directExpanded]);
 
@@ -368,7 +368,7 @@ export function Sidebar({
         };
 
         pollPresence();
-        const timer = setInterval(pollPresence, 30000);
+        const timer = setInterval(pollPresence, 15000);
         return () => clearInterval(timer);
     }, [contacts, workspacePrefs, directExpanded]);
 

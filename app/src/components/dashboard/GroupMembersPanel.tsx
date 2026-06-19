@@ -63,6 +63,33 @@ export function GroupMembersPanel({ groupId, currentUserId, canManageMembers, on
         return () => window.removeEventListener('mousedown', handler);
     }, [contextMenu]);
 
+    // Poll presence for group members
+    useEffect(() => {
+        if (members.length === 0) return;
+        
+        const pollPresence = async () => {
+            const userIds = members.map(m => Number(m.user_id)).filter(id => id > 0);
+            if (userIds.length === 0) return;
+            try {
+                const result = await invoke<{ user_id: number; online: boolean }[]>('cmd_get_user_presence', { userIds });
+                if (result) {
+                    setMembers(prev => prev.map(m => {
+                        const status = result.find(p => p.user_id === Number(m.user_id));
+                        if (status) {
+                            return { ...m, online_status: status.online ? 'online' : 'offline' };
+                        }
+                        return m;
+                    }));
+                }
+            } catch (e) {
+                console.debug('Failed to fetch member presence:', e);
+            }
+        };
+
+        const timer = setInterval(pollPresence, 15000);
+        return () => clearInterval(timer);
+    }, [members.length, groupId]);
+
     const loadMembers = async () => {
         setLoading(true);
         try {

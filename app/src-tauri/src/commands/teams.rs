@@ -3223,9 +3223,9 @@ pub async fn cmd_get_user_presence(
     }
     let client = client_opt.unwrap();
 
-    let mut results = Vec::new();
+    let mut input_users = Vec::new();
 
-    for user_id in user_ids {
+    for &user_id in &user_ids {
         let cached_peer = {
             let cache = state.peer_cache.read().await;
             cache.get(&user_id).cloned()
@@ -3246,48 +3246,47 @@ pub async fn cmd_get_user_presence(
                 _ => continue,
             }
         } else {
-            // Fallback: try with access_hash=0 for users not yet in peer cache
             tl::enums::InputUser::User(tl::types::InputUser {
                 user_id,
                 access_hash: 0,
             })
         };
+        input_users.push(input_user);
+    }
 
-        let user_result = client
-            .invoke(&tl::functions::users::GetUsers {
-                id: vec![input_user],
-            })
-            .await;
+    if input_users.is_empty() {
+        return Ok(Vec::new());
+    }
 
-        match user_result {
-            Ok(users) => {
-                for user in users {
-                    if let tl::enums::User::User(u) = user {
-                        let status = u.status;
-                        let (online, last_seen) = match status {
-                            Some(tl::enums::UserStatus::Online(_)) => (true, None),
-                            Some(tl::enums::UserStatus::Offline(off)) => {
-                                let was = chrono::DateTime::from_timestamp(off.was_online as i64, 0)
-                                    .map(|d| d.to_string())
-                                    .unwrap_or_else(|| "recently".to_string());
-                                (false, Some(was))
-                            }
-                            Some(tl::enums::UserStatus::Recently(_)) => (false, Some("recently".to_string())),
-                            Some(tl::enums::UserStatus::LastWeek(_)) => (false, Some("last week".to_string())),
-                            Some(tl::enums::UserStatus::LastMonth(_)) => (false, Some("last month".to_string())),
-                            _ => (false, Some("recently".to_string())),
-                        };
-                        results.push(UserPresence {
-                            user_id,
-                            online,
-                            last_seen,
-                        });
-                    }
+    let mut results = Vec::new();
+    let users_result = client
+        .invoke(&tl::functions::users::GetUsers {
+            id: input_users,
+        })
+        .await
+        .map_err(|e| format!("Failed to get users: {}", e))?;
+
+    for user in users_result {
+        if let tl::enums::User::User(u) = user {
+            let status = u.status;
+            let (online, last_seen) = match status {
+                Some(tl::enums::UserStatus::Online(_)) => (true, None),
+                Some(tl::enums::UserStatus::Offline(off)) => {
+                    let was = chrono::DateTime::from_timestamp(off.was_online as i64, 0)
+                        .map(|d| d.to_string())
+                        .unwrap_or_else(|| "recently".to_string());
+                    (false, Some(was))
                 }
-            }
-            Err(e) => {
-                log::warn!("Failed to get user presence for {}: {}", user_id, e);
-            }
+                Some(tl::enums::UserStatus::Recently(_)) => (false, Some("recently".to_string())),
+                Some(tl::enums::UserStatus::LastWeek(_)) => (false, Some("last week".to_string())),
+                Some(tl::enums::UserStatus::LastMonth(_)) => (false, Some("last month".to_string())),
+                _ => (false, Some("recently".to_string())),
+            };
+            results.push(UserPresence {
+                user_id: u.id,
+                online,
+                last_seen,
+            });
         }
     }
 
