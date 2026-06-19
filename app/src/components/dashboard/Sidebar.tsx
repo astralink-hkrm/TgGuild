@@ -1,5 +1,6 @@
 import { useState, useEffect, ReactNode } from 'react';
-import { Building2, HardDrive, Folder, Plus, RefreshCw, LogOut, Users, LayoutGrid, ChevronDown, ChevronRight, Settings, File, Film, Image as ImageIcon, Mic, Music } from 'lucide-react';
+import { Building2, HardDrive, Folder, Plus, RefreshCw, LogOut, Users, LayoutGrid, ChevronDown, ChevronRight, Settings, File, Film, Image as ImageIcon, Mic, Music, X } from 'lucide-react';
+import { toast } from 'sonner';
 import { motion, AnimatePresence } from 'framer-motion';
 import { invoke } from '@tauri-apps/api/core';
 import { SidebarItem } from './SidebarItem';
@@ -105,6 +106,10 @@ export function Sidebar({
     const [lastMessages, setLastMessages] = useState<Record<string, CachedMessagePreview | null>>({});
     const [typingPeers, setTypingPeers] = useState<Record<string, TypingUserData[]>>({});
     const [presenceData, setPresenceData] = useState<Record<string, PresenceData>>({});
+    const [showCreateGroupModal, setShowCreateGroupModal] = useState(false);
+    const [newGroupName, setNewGroupName] = useState('');
+    const [newGroupDesc, setNewGroupDesc] = useState('');
+    const [creatingGroup, setCreatingGroup] = useState(false);
 
     useEffect(() => {
         loadInitialDirectory();
@@ -199,14 +204,29 @@ export function Sidebar({
         }
     }
 
-    const handleCreateGroup = async () => {
-        const name = prompt('Enter group name:');
-        if (!name) return;
+    const handleCreateGroup = () => {
+        setNewGroupName('');
+        setNewGroupDesc('');
+        setShowCreateGroupModal(true);
+    };
+
+    const handleCreateGroupSubmit = async () => {
+        if (!newGroupName.trim()) {
+            toast.error('Group name is required');
+            return;
+        }
+        setCreatingGroup(true);
         try {
-            await invoke('cmd_create_team', { name, description: null });
+            await invoke('cmd_create_team', { name: newGroupName.trim(), description: newGroupDesc.trim() || null });
+            toast.success('Group created');
+            setShowCreateGroupModal(false);
+            setNewGroupName('');
+            setNewGroupDesc('');
             loadGroups();
         } catch (e) {
-            console.error('Failed to create group:', e);
+            toast.error(`Failed to create group: ${e}`);
+        } finally {
+            setCreatingGroup(false);
         }
     };
 
@@ -789,6 +809,79 @@ export function Sidebar({
                     }}
                 />
             )}
+
+            {showCreateGroupModal && (
+                <CreateGroupModal
+                    name={newGroupName}
+                    description={newGroupDesc}
+                    loading={creatingGroup}
+                    onNameChange={setNewGroupName}
+                    onDescriptionChange={setNewGroupDesc}
+                    onClose={() => setShowCreateGroupModal(false)}
+                    onSubmit={handleCreateGroupSubmit}
+                />
+            )}
         </aside>
     )
+}
+
+function CreateGroupModal({
+    name,
+    description,
+    loading,
+    onNameChange,
+    onDescriptionChange,
+    onClose,
+    onSubmit,
+}: {
+    name: string;
+    description: string;
+    loading: boolean;
+    onNameChange: (value: string) => void;
+    onDescriptionChange: (value: string) => void;
+    onClose: () => void;
+    onSubmit: () => void;
+}) {
+    return (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[100] p-4">
+            <div className="w-full max-w-md rounded-xl border border-telegram-border bg-telegram-surface p-5 shadow-2xl">
+                <div className="mb-4 flex items-center justify-between">
+                    <h3 className="text-lg font-semibold text-telegram-text">Create Group</h3>
+                    <button onClick={onClose} className="p-2 rounded-full hover:bg-telegram-hover text-telegram-subtext">
+                        <X className="w-5 h-5" />
+                    </button>
+                </div>
+                <div className="space-y-4">
+                    <input
+                        autoFocus
+                        value={name}
+                        onChange={(e) => onNameChange(e.target.value)}
+                        onKeyDown={(e) => e.key === 'Enter' && !loading && name.trim() && onSubmit()}
+                        className="w-full rounded-lg border border-telegram-border bg-telegram-hover px-3 py-2 text-sm text-telegram-text outline-none focus:border-telegram-primary"
+                        placeholder="Group name"
+                    />
+                    <textarea
+                        value={description}
+                        onChange={(e) => onDescriptionChange(e.target.value)}
+                        className="w-full resize-none rounded-lg border border-telegram-border bg-telegram-hover px-3 py-2 text-sm text-telegram-text outline-none focus:border-telegram-primary"
+                        rows={3}
+                        placeholder="Description (optional)"
+                    />
+                    <button
+                        onClick={onSubmit}
+                        disabled={loading || !name.trim()}
+                        className="w-full rounded-lg bg-telegram-primary px-4 py-2 text-sm font-medium text-white disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                    >
+                        {loading && (
+                            <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
+                                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                            </svg>
+                        )}
+                        {loading ? 'Creating...' : 'Create'}
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
 }
