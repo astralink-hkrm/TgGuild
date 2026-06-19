@@ -6,15 +6,15 @@ import { SidebarItem } from './SidebarItem';
 import { BandwidthWidget } from './BandwidthWidget';
 import { MemberStack } from './MemberStack';
 import { TelegramAvatar } from './TelegramAvatar';
-import { TeamVisibilityModal } from './TeamVisibilityModal';
+import { WorkspaceVisibilityModal } from './WorkspaceVisibilityModal';
 import {
-    isContactVisible,
-    isTeamVisible,
-    isDriveVisible,
-    readTeamVisibility,
-    TEAM_VISIBILITY_CHANGED_EVENT,
-    TeamVisibilitySettings,
-} from './teamVisibility';
+    loadWorkspacePrefs,
+    saveWorkspacePrefs,
+    isGroupVisible,
+    isDriveVisible as isDriveVisibleWs,
+    isDMVisible,
+    WorkspacePrefs,
+} from './workspaceVisibility';
 import { readTelegramDirectoryCache, saveTelegramDirectoryCache, readTelegramMessageCache } from './telegramCache';
 import { TelegramFolder, BandwidthStats } from '../../types';
 import { parseDate } from '../../utils';
@@ -94,7 +94,7 @@ export function Sidebar({
     const [groups, setGroups] = useState<GroupInfo[]>([]);
     const [contacts, setContacts] = useState<ContactInfo[]>([]);
     const [streamToken, setStreamToken] = useState('');
-    const [teamVisibility, setTeamVisibility] = useState<TeamVisibilitySettings>(() => readTeamVisibility());
+    const [workspacePrefs, setWorkspacePrefs] = useState<WorkspacePrefs | null>(null);
     const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
     const [teamsBeforeDate, setTeamsBeforeDate] = useState<number | null>(null);
     const [contactsBeforeDate, setContactsBeforeDate] = useState<number | null>(null);
@@ -109,16 +109,7 @@ export function Sidebar({
     useEffect(() => {
         loadInitialDirectory();
         invoke<string>('cmd_get_stream_token').then(setStreamToken).catch(console.error);
-    }, []);
-
-    useEffect(() => {
-        const handleVisibilityChange = () => setTeamVisibility(readTeamVisibility());
-        window.addEventListener(TEAM_VISIBILITY_CHANGED_EVENT, handleVisibilityChange);
-        window.addEventListener('storage', handleVisibilityChange);
-        return () => {
-            window.removeEventListener(TEAM_VISIBILITY_CHANGED_EVENT, handleVisibilityChange);
-            window.removeEventListener('storage', handleVisibilityChange);
-        };
+        loadWorkspacePrefs().then(setWorkspacePrefs);
     }, []);
 
     const loadInitialDirectory = async () => {
@@ -284,12 +275,12 @@ export function Sidebar({
             const peers: string[] = [];
             if (teamsExpanded) {
                 for (const g of groups) {
-                    if (isTeamVisible(g.id, teamVisibility)) peers.push(String(g.id));
+                    if (!workspacePrefs || isGroupVisible(g.id, workspacePrefs)) peers.push(String(g.id));
                 }
             }
             if (directExpanded) {
                 for (const c of contacts) {
-                    if (isContactVisible(c.user_id, teamVisibility)) peers.push(c.user_id);
+                    if (!workspacePrefs || isDMVisible(c.user_id, workspacePrefs)) peers.push(c.user_id);
                 }
             }
             const batch = peers.slice(0, 30);
@@ -312,12 +303,12 @@ export function Sidebar({
         pollTyping();
         const timer = setInterval(pollTyping, 3000);
         return () => clearInterval(timer);
-    }, [groups, contacts, teamVisibility, teamsExpanded, directExpanded]);
+    }, [groups, contacts, workspacePrefs, teamsExpanded, directExpanded]);
 
     // Poll presence for direct chats
     useEffect(() => {
         if (!directExpanded) return;
-        const visible = contacts.filter(c => isContactVisible(c.user_id, teamVisibility));
+        const visible = workspacePrefs ? contacts.filter(c => isDMVisible(c.user_id, workspacePrefs)) : contacts;
         if (visible.length === 0) return;
 
         const pollPresence = async () => {
@@ -342,7 +333,7 @@ export function Sidebar({
         pollPresence();
         const timer = setInterval(pollPresence, 15000);
         return () => clearInterval(timer);
-    }, [contacts, teamVisibility, directExpanded]);
+    }, [contacts, workspacePrefs, directExpanded]);
 
     const formatSidebarDate = (dateStr: string): string => {
         const parsed = parseDate(dateStr);
@@ -389,8 +380,12 @@ export function Sidebar({
         }
     };
 
-    const visibleGroups = groups.filter(group => isTeamVisible(group.id, teamVisibility));
-    const visibleContacts = contacts.filter(contact => isContactVisible(contact.user_id, teamVisibility));
+    const visibleGroups = workspacePrefs
+        ? groups.filter(group => isGroupVisible(group.id, workspacePrefs))
+        : groups;
+    const visibleContacts = workspacePrefs
+        ? contacts.filter(contact => isDMVisible(contact.user_id, workspacePrefs))
+        : contacts;
 
     return (
         <aside className="w-64 bg-telegram-surface border-r border-telegram-border flex flex-col" onClick={e => e.stopPropagation()}>
@@ -475,7 +470,7 @@ export function Sidebar({
                                     onDrop={(e: React.DragEvent) => onDrop(e, null)}
                                     folderId={null}
                                 />
-                                {folders.filter(f => isDriveVisible(f.id, teamVisibility)).map(folder => (
+                                {folders.filter(f => !workspacePrefs || isDriveVisibleWs(f.id, workspacePrefs)).map(folder => (
                                     <SidebarItem
                                         key={folder.id}
                                         icon={Folder}
@@ -778,15 +773,20 @@ export function Sidebar({
                 {bandwidth && <BandwidthWidget bandwidth={bandwidth} />}
             </div>
 
-            {showVisibilitySettings && (
-                <TeamVisibilityModal
+            {showVisibilitySettings && workspacePrefs && (
+                <WorkspaceVisibilityModal
                     teams={groups}
                     contacts={contacts}
                     drives={folders.map(f => ({ id: f.id, name: f.name, username: null, member_count: f.member_count ?? 0 }))}
-                    settings={teamVisibility}
+                    prefs={workspacePrefs}
                     streamToken={streamToken}
+                    mode="settings"
                     onClose={() => setShowVisibilitySettings(false)}
-                    onChange={setTeamVisibility}
+                    onSave={(prefs) => {
+                        setWorkspacePrefs(prefs);
+                        saveWorkspacePrefs(prefs);
+                        setShowVisibilitySettings(false);
+                    }}
                 />
             )}
         </aside>

@@ -7,6 +7,7 @@ import { Dashboard } from "./components/Dashboard";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { WindowControls } from "./components/WindowControls";
 import { motion, AnimatePresence } from "framer-motion";
+import { loadWorkspacePrefs } from "./components/dashboard/workspaceVisibility";
 import "./App.css";
 
 import { Toaster, toast } from "sonner";
@@ -62,6 +63,7 @@ function LoadingScreen() {
 function AppContent() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [isCheckingAuth, setIsCheckingAuth] = useState(true);
+  const [showWorkspaceSetup, setShowWorkspaceSetup] = useState(false);
   const { theme } = useTheme();
   const oauthHandled = useRef(false);
 
@@ -99,6 +101,11 @@ function AppContent() {
             const isAuthorized = await invoke<boolean>("cmd_check_connection");
             if (isAuthorized) {
               setIsAuthenticated(true);
+              // Check workspace setup status
+              const prefs = await loadWorkspacePrefs();
+              if (!prefs.firstRunCompleted) {
+                setShowWorkspaceSetup(true);
+              }
             }
           }
         }
@@ -144,7 +151,11 @@ function AppContent() {
               exit={{ opacity: 0 }}
               className="h-full w-full"
             >
-              <Dashboard onLogout={() => setIsAuthenticated(false)} />
+              <Dashboard
+                onLogout={() => setIsAuthenticated(false)}
+                showWorkspaceSetup={showWorkspaceSetup}
+                onWorkspaceSetupComplete={() => setShowWorkspaceSetup(false)}
+              />
             </motion.div>
           ) : (
             <motion.div

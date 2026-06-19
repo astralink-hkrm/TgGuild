@@ -24,6 +24,8 @@ import { DragDropOverlay } from './dashboard/DragDropOverlay';
 import { ExternalDropBlocker } from './dashboard/ExternalDropBlocker';
 import { CreateFolderModal } from './dashboard/CreateFolderModal';
 import { OpeningOverlay } from './dashboard/OpeningOverlay';
+import { WorkspaceVisibilityModal } from './dashboard/WorkspaceVisibilityModal';
+import { loadWorkspacePrefs, WorkspacePrefs } from './dashboard/workspaceVisibility';
 
 // Hooks
 import { useTelegramConnection } from '../hooks/useTelegramConnection';
@@ -32,7 +34,13 @@ import { useFileUpload } from '../hooks/useFileUpload';
 import { useFileDownload } from '../hooks/useFileDownload';
 import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
 
-export function Dashboard({ onLogout }: { onLogout: () => void }) {
+interface DashboardProps {
+    onLogout: () => void;
+    showWorkspaceSetup?: boolean;
+    onWorkspaceSetupComplete?: () => void;
+}
+
+export function Dashboard({ onLogout, showWorkspaceSetup = false, onWorkspaceSetupComplete }: DashboardProps) {
     const queryClient = useQueryClient();
 
     const {
@@ -84,7 +92,10 @@ export function Dashboard({ onLogout }: { onLogout: () => void }) {
     const [groups, setGroups] = useState<{id: number, name: string, username: string | null, member_count: number, photo_url?: string | null}[]>([]);
     const [activeMembers, setActiveMembers] = useState<any[]>([]);
     const [showAddSubscriber, setShowAddSubscriber] = useState(false);
+    const [showWorkspaceSettings, setShowWorkspaceSettings] = useState(false);
     const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+    const [contacts, setContacts] = useState<any[]>([]);
+    const [workspacePrefs, setWorkspacePrefs] = useState<WorkspacePrefs | null>(null);
     const internalDragRef = useRef<number | null>(null);
 
     const loadGroups = async () => {
@@ -111,7 +122,16 @@ export function Dashboard({ onLogout }: { onLogout: () => void }) {
     };
 
     useEffect(() => {
-        loadGroups();
+        const init = async () => {
+            await loadGroups();
+            try {
+                const resp = await invoke<{ chats: any[] }>('cmd_get_direct_chats');
+                setContacts(resp.chats);
+            } catch { /* ignore */ }
+            const prefs = await loadWorkspacePrefs();
+            setWorkspacePrefs(prefs);
+        };
+        init();
         invoke<{ user_id: string } | null>('cmd_get_current_user')
             .then((user) => setCurrentUserId(user?.user_id || null))
             .catch(console.error);
@@ -701,6 +721,38 @@ export function Dashboard({ onLogout }: { onLogout: () => void }) {
                     canManageMembers={activeGroupId !== null ? canManageActiveGroup : true}
                     onClose={() => setShowAddSubscriber(false)}
                     onSuccess={() => loadActiveMembers(activeFolderId || activeGroupId)}
+                />
+            )}
+
+            {showWorkspaceSetup && workspacePrefs && (
+                <WorkspaceVisibilityModal
+                    teams={groups}
+                    contacts={contacts}
+                    drives={folders.map(f => ({ id: f.id, name: f.name, username: null, member_count: f.member_count ?? 0 }))}
+                    prefs={workspacePrefs}
+                    mode="setup"
+                    onClose={() => {
+                        onWorkspaceSetupComplete?.();
+                    }}
+                    onSave={(prefs) => {
+                        setWorkspacePrefs(prefs);
+                        onWorkspaceSetupComplete?.();
+                    }}
+                />
+            )}
+
+            {showWorkspaceSettings && workspacePrefs && (
+                <WorkspaceVisibilityModal
+                    teams={groups}
+                    contacts={contacts}
+                    drives={folders.map(f => ({ id: f.id, name: f.name, username: null, member_count: f.member_count ?? 0 }))}
+                    prefs={workspacePrefs}
+                    mode="settings"
+                    onClose={() => setShowWorkspaceSettings(false)}
+                    onSave={(prefs) => {
+                        setWorkspacePrefs(prefs);
+                        setShowWorkspaceSettings(false);
+                    }}
                 />
             )}
         </div>
