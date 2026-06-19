@@ -114,7 +114,7 @@ interface PinnedMessageInfo {
 
 const MESSAGES_PAGE_SIZE = 50;
 const SCROLLBACK_THRESHOLD = 120;
-const PRESENCE_POLL_INTERVAL = 30000;
+const PRESENCE_POLL_INTERVAL = 15000;
 
 interface TeamChatProps {
     groupId: number | null;
@@ -1898,8 +1898,8 @@ export function TeamChat({
                                     setEditText(e.target.value);
                                 } else {
                                     setNewMessage(e.target.value);
-                                    realtime.handleInputChange();
                                 }
+                                realtime.handleInputChange();
                             }}
                             onKeyDown={(e) => {
                                 if (e.key === 'Enter' && !e.shiftKey) {
