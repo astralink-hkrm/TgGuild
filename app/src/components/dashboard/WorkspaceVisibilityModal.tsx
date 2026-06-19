@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, useRef, useEffect } from 'react';
 import { Check, Search, X } from 'lucide-react';
 import { WorkspacePrefs, saveWorkspacePrefs } from './workspaceVisibility';
 import { TelegramAvatar } from './TelegramAvatar';
@@ -46,6 +46,16 @@ export function WorkspaceVisibilityModal({
     visibleDMs: [...prefs.visibleDMs],
   }));
   const [query, setQuery] = useState('');
+  const overlayRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (mode !== 'settings') return;
+    const handler = (e: MouseEvent) => {
+      if (overlayRef.current && e.target === overlayRef.current) onClose();
+    };
+    window.addEventListener('mousedown', handler);
+    return () => window.removeEventListener('mousedown', handler);
+  }, [mode, onClose]);
 
   const filteredTeams = useMemo(() => {
     const needle = query.toLowerCase();
@@ -142,180 +152,221 @@ export function WorkspaceVisibilityModal({
     onClose();
   };
 
-  return (
-    <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/50 p-4" onClick={mode === 'settings' ? onClose : undefined}>
-      <div
-        className="w-full max-w-xl overflow-hidden rounded-xl border border-telegram-border bg-telegram-surface shadow-2xl"
-        onClick={(event) => event.stopPropagation()}
-      >
-        <div className="flex items-center justify-between border-b border-telegram-border p-4">
-          <div>
-            <h3 className="text-base font-semibold text-telegram-text">
-              {mode === 'setup' ? 'Choose What To Display' : 'Workspace Visibility'}
-            </h3>
-            <p className="text-xs text-telegram-subtext mt-0.5">
-              {mode === 'setup'
-                ? 'Select the drives, groups, and conversations you want visible in your workspace. You can change this later in Settings.'
-                : 'Manage which items appear in your sidebar.'}
+  const content = (
+    <>
+      {/* Fixed Header */}
+      <div className="flex items-start justify-between gap-4 px-8 pt-7 pb-5">
+        <div className="min-w-0 flex-1">
+          <h2 className="text-lg font-semibold text-telegram-text leading-snug">
+            {mode === 'setup' ? 'Choose What To Display' : 'Workspace Visibility'}
+          </h2>
+          <p className="text-sm text-telegram-subtext mt-1.5 leading-relaxed">
+            {mode === 'setup'
+              ? 'Select the drives, groups, and conversations you want visible in your workspace.'
+              : 'Manage which items appear in your sidebar.'}
+          </p>
+        </div>
+        <button
+          onClick={onClose}
+          className="mt-0.5 rounded-lg p-1.5 text-telegram-subtext hover:bg-telegram-hover hover:text-telegram-text transition-colors"
+        >
+          <X className="h-5 w-5" />
+        </button>
+      </div>
+
+      {/* Fixed Controls */}
+      <div className="px-8 pb-4 space-y-3">
+        <div className="relative">
+          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-telegram-subtext" />
+          <input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Search drives, groups or people"
+            className="w-full rounded-lg border border-telegram-border bg-telegram-hover py-2.5 pl-10 pr-3 text-sm text-telegram-text outline-none placeholder:text-telegram-subtext/60 focus:border-telegram-primary/50 focus:bg-telegram-bg transition-colors"
+          />
+        </div>
+
+        <button
+          onClick={() => setDraft(prev => ({ ...prev, performanceMode: !prev.performanceMode }))}
+          className="flex w-full items-center gap-3 rounded-lg border border-telegram-border bg-telegram-hover/30 px-4 py-3 text-left hover:bg-telegram-hover/60 transition-colors"
+        >
+          <div className={`flex h-5 w-9 shrink-0 items-center rounded-full px-0.5 transition-colors ${draft.performanceMode ? 'bg-telegram-primary' : 'bg-telegram-subtext/40'}`}>
+            <div className={`h-4 w-4 rounded-full bg-white shadow-sm transition-transform ${draft.performanceMode ? 'translate-x-4' : 'translate-x-0'}`} />
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-medium text-telegram-text">Selective Sync (Performance Mode)</p>
+            <p className="text-xs text-telegram-subtext/80 leading-relaxed mt-0.5">
+              Only load data for selected items. Speeds up app startup and reduces memory usage.
             </p>
           </div>
+        </button>
+
+        {draft.performanceMode && (
           <button
-            onClick={onClose}
-            className="rounded-full p-2 text-telegram-subtext hover:bg-telegram-hover hover:text-telegram-text transition-colors"
+            onClick={toggleAll}
+            className="flex w-full items-center gap-3 rounded-lg px-2 py-2 text-left hover:bg-telegram-hover transition-colors"
           >
-            <X className="h-5 w-5" />
+            <Checkbox checked={allSelected} />
+            <span className="text-sm font-medium text-telegram-text">
+              {allSelected ? 'Deselect All' : 'Select All'}
+            </span>
+            <span className="text-xs text-telegram-subtext/70 ml-1">
+              ({filteredDrives.length + filteredTeams.length + filteredContacts.length} items)
+            </span>
           </button>
-        </div>
+        )}
+      </div>
 
-        <div className="border-b border-telegram-border p-4">
-          <div className="relative mb-3">
-            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-telegram-subtext" />
-            <input
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder="Search drives, groups or people"
-              className="w-full rounded-xl border border-telegram-border bg-telegram-hover py-2 pl-9 pr-3 text-sm text-telegram-text outline-none focus:border-telegram-primary"
-            />
-          </div>
+      {/* Separator */}
+      <div className="mx-8 border-t border-telegram-border/60" />
 
-          <button
-            onClick={() => setDraft(prev => ({ ...prev, performanceMode: !prev.performanceMode }))}
-            className="mb-3 flex w-full items-center gap-3 rounded-xl border border-telegram-primary/20 bg-telegram-primary/5 px-3 py-3 text-left hover:bg-telegram-primary/10 transition-colors"
-          >
-            <div className={`flex h-5 w-10 items-center rounded-full px-1 transition-colors ${draft.performanceMode ? 'bg-telegram-primary' : 'bg-telegram-subtext'}`}>
-              <div className={`h-3 w-3 rounded-full bg-white transition-transform ${draft.performanceMode ? 'translate-x-5' : 'translate-x-0'}`} />
-            </div>
-            <div className="min-w-0 flex-1">
-              <p className="text-sm font-semibold text-telegram-text">Selective Sync (Performance Mode)</p>
-              <p className="text-[10px] text-telegram-subtext leading-tight">
-                Only load data for selected items. Speeds up app startup and reduces memory usage.
-              </p>
-            </div>
-          </button>
-
-          {draft.performanceMode && (
+      {/* Scrollable Content */}
+      <div className="flex-1 overflow-y-auto px-8 py-2 space-y-2 custom-scrollbar">
+        {filteredDrives.length > 0 && (
+          <SectionHeader label="Drives" count={filteredDrives.length} />
+        )}
+        {filteredDrives.map(drive => {
+          const checked = !draft.performanceMode || draft.visibleDrives.includes(drive.id);
+          return (
             <button
-              onClick={toggleAll}
-              className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left hover:bg-telegram-hover transition-colors"
+              key={drive.id}
+              onClick={() => draft.performanceMode && toggleDrive(drive.id)}
+              className={`flex w-full items-center gap-3 rounded-lg px-3 py-3 text-left transition-colors ${
+                draft.performanceMode ? 'hover:bg-telegram-hover cursor-pointer' : 'cursor-default opacity-70'
+              }`}
             >
-              <Checkbox checked={allSelected} />
+              {draft.performanceMode ? (
+                <Checkbox checked={checked} />
+              ) : (
+                <span className="flex h-5 w-5 items-center justify-center rounded border border-telegram-border bg-telegram-hover">
+                  <Check className="h-3.5 w-3.5 text-telegram-subtext/40" />
+                </span>
+              )}
               <div className="min-w-0 flex-1">
-                <p className="text-sm font-medium text-telegram-text">Select All</p>
-                <p className="text-xs text-telegram-subtext">Show or hide all items</p>
+                <p className="truncate text-sm font-medium text-telegram-text">{drive.name}</p>
+                <p className="truncate text-xs text-telegram-subtext mt-0.5">
+                  {drive.member_count} members{drive.username ? ` \u2022 @${drive.username}` : ''}
+                </p>
               </div>
             </button>
-          )}
-        </div>
+          );
+        })}
 
-        <div className="max-h-[420px] overflow-y-auto p-3 custom-scrollbar">
-          {filteredDrives.length > 0 && (
-            <>
-              <SectionHeader label="Drives" count={filteredDrives.length} />
-              {filteredDrives.map(drive => {
-                const checked = !draft.performanceMode || draft.visibleDrives.includes(drive.id);
-                return (
-                  <button
-                    key={drive.id}
-                    onClick={() => draft.performanceMode && toggleDrive(drive.id)}
-                    className={`flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left transition-colors ${
-                      draft.performanceMode ? 'hover:bg-telegram-hover cursor-pointer' : 'cursor-default opacity-80'
-                    }`}
-                  >
-                    {draft.performanceMode ? (
-                      <Checkbox checked={checked} />
-                    ) : (
-                      <span className="flex h-5 w-5 items-center justify-center rounded border border-telegram-border bg-telegram-hover">
-                        <Check className="h-3.5 w-3.5 text-telegram-subtext/40" />
-                      </span>
-                    )}
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-medium text-telegram-text">{drive.name}</p>
-                      <p className="truncate text-xs text-telegram-subtext">
-                        {drive.member_count} members{drive.username ? ` • @${drive.username}` : ''}
-                      </p>
-                    </div>
-                  </button>
-                );
-              })}
-            </>
-          )}
-
-          <SectionHeader label="Groups" count={filteredTeams.length} />
-          {filteredTeams.map(team => {
-            const checked = !draft.performanceMode || draft.visibleGroups.includes(team.id);
-            return (
-              <button
-                key={team.id}
-                onClick={() => draft.performanceMode && toggleTeam(team.id)}
-                className={`flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left transition-colors ${
-                  draft.performanceMode ? 'hover:bg-telegram-hover cursor-pointer' : 'cursor-default opacity-80'
-                }`}
-              >
-                {draft.performanceMode ? (
-                  <Checkbox checked={checked} />
-                ) : (
-                  <span className="flex h-5 w-5 items-center justify-center rounded border border-telegram-border bg-telegram-hover">
-                    <Check className="h-3.5 w-3.5 text-telegram-subtext/40" />
-                  </span>
-                )}
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-medium text-telegram-text">{team.name}</p>
-                  <p className="truncate text-xs text-telegram-subtext">
-                    {team.member_count} members{team.username ? ` • @${team.username}` : ''}
-                  </p>
-                </div>
-              </button>
-            );
-          })}
-
-          <SectionHeader label="Direct Messages" count={filteredContacts.length} />
-          {filteredContacts.map(contact => {
-            const checked = !draft.performanceMode || draft.visibleDMs.includes(contact.user_id);
-            return (
-              <button
-                key={contact.user_id}
-                onClick={() => draft.performanceMode && toggleDM(contact.user_id)}
-                className={`flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left transition-colors ${
-                  draft.performanceMode ? 'hover:bg-telegram-hover cursor-pointer' : 'cursor-default opacity-80'
-                }`}
-              >
-                {draft.performanceMode ? (
-                  <Checkbox checked={checked} />
-                ) : (
-                  <span className="flex h-5 w-5 items-center justify-center rounded border border-telegram-border bg-telegram-hover">
-                    <Check className="h-3.5 w-3.5 text-telegram-subtext/40" />
-                  </span>
-                )}
-                <TelegramAvatar user={contact} token={streamToken} size="md" />
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-medium text-telegram-text">
-                    {contact.first_name} {contact.last_name || ''}
-                  </p>
-                  <p className="truncate text-xs text-telegram-subtext">
-                    {contact.username ? `@${contact.username}` : contact.phone || 'Telegram contact'}
-                  </p>
-                </div>
-              </button>
-            );
-          })}
-        </div>
-
-        <div className="flex items-center justify-end gap-2 border-t border-telegram-border p-4">
-          {mode === 'setup' && (
+        {filteredTeams.length > 0 && (
+          <>
+            <div className="pt-2" />
+            <SectionHeader label="Groups" count={filteredTeams.length} />
+          </>
+        )}
+        {filteredTeams.map(team => {
+          const checked = !draft.performanceMode || draft.visibleGroups.includes(team.id);
+          return (
             <button
-              onClick={handleSkip}
-              className="rounded-lg px-4 py-2 text-sm font-medium text-telegram-subtext hover:bg-telegram-hover hover:text-telegram-text transition-colors"
+              key={team.id}
+              onClick={() => draft.performanceMode && toggleTeam(team.id)}
+              className={`flex w-full items-center gap-3 rounded-lg px-3 py-3 text-left transition-colors ${
+                draft.performanceMode ? 'hover:bg-telegram-hover cursor-pointer' : 'cursor-default opacity-70'
+              }`}
             >
-              Skip (show everything)
+              {draft.performanceMode ? (
+                <Checkbox checked={checked} />
+              ) : (
+                <span className="flex h-5 w-5 items-center justify-center rounded border border-telegram-border bg-telegram-hover">
+                  <Check className="h-3.5 w-3.5 text-telegram-subtext/40" />
+                </span>
+              )}
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-medium text-telegram-text">{team.name}</p>
+                <p className="truncate text-xs text-telegram-subtext mt-0.5">
+                  {team.member_count} members{team.username ? ` \u2022 @${team.username}` : ''}
+                </p>
+              </div>
             </button>
-          )}
+          );
+        })}
+
+        {filteredContacts.length > 0 && (
+          <>
+            <div className="pt-2" />
+            <SectionHeader label="Direct Messages" count={filteredContacts.length} />
+          </>
+        )}
+        {filteredContacts.map(contact => {
+          const checked = !draft.performanceMode || draft.visibleDMs.includes(contact.user_id);
+          return (
+            <button
+              key={contact.user_id}
+              onClick={() => draft.performanceMode && toggleDM(contact.user_id)}
+              className={`flex w-full items-center gap-3 rounded-lg px-3 py-3 text-left transition-colors ${
+                draft.performanceMode ? 'hover:bg-telegram-hover cursor-pointer' : 'cursor-default opacity-70'
+              }`}
+            >
+              {draft.performanceMode ? (
+                <Checkbox checked={checked} />
+              ) : (
+                <span className="flex h-5 w-5 items-center justify-center rounded border border-telegram-border bg-telegram-hover">
+                  <Check className="h-3.5 w-3.5 text-telegram-subtext/40" />
+                </span>
+              )}
+              <TelegramAvatar user={contact} token={streamToken} size="md" />
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-medium text-telegram-text">
+                  {contact.first_name} {contact.last_name || ''}
+                </p>
+                <p className="truncate text-xs text-telegram-subtext mt-0.5">
+                  {contact.username ? `@${contact.username}` : contact.phone || 'Telegram contact'}
+                </p>
+              </div>
+            </button>
+          );
+        })}
+
+        <div className="h-1" />
+      </div>
+
+      {/* Fixed Footer */}
+      <div className="flex items-center justify-end gap-3 px-8 py-4 border-t border-telegram-border/60">
+        <button
+          onClick={onClose}
+          className="rounded-lg px-5 py-2.5 text-sm font-medium text-telegram-subtext hover:bg-telegram-hover hover:text-telegram-text transition-colors"
+        >
+          Cancel
+        </button>
+        {mode === 'setup' && (
           <button
-            onClick={handleSave}
-            className="rounded-lg bg-telegram-primary px-5 py-2 text-sm font-semibold text-white hover:bg-telegram-primary/90 transition-colors"
+            onClick={handleSkip}
+            className="rounded-lg px-5 py-2.5 text-sm font-medium text-telegram-subtext hover:bg-telegram-hover hover:text-telegram-text transition-colors"
           >
-            {mode === 'setup' ? 'Save & Continue' : 'Save'}
+            Skip (show everything)
           </button>
-        </div>
+        )}
+        <button
+          onClick={handleSave}
+          className="rounded-lg bg-telegram-primary px-6 py-2.5 text-sm font-semibold text-white hover:bg-telegram-primary/90 shadow-sm transition-colors"
+        >
+          {mode === 'setup' ? 'Save & Continue' : 'Save'}
+        </button>
+      </div>
+    </>
+  );
+
+  return (
+    <div
+      ref={overlayRef}
+      className="fixed inset-0 z-[110] flex items-center justify-center bg-black/60 p-4 md:p-8 lg:p-12 backdrop-blur-sm"
+      style={{ paddingTop: 'max(48px, 5vh)', paddingBottom: 'max(48px, 5vh)' }}
+    >
+      <div
+        className="flex flex-col w-full bg-telegram-surface shadow-2xl overflow-hidden"
+        style={{
+          maxWidth: '900px',
+          maxHeight: '80vh',
+          borderRadius: '20px',
+          boxShadow: '0 25px 60px rgba(0,0,0,0.25), 0 8px 20px rgba(0,0,0,0.15)',
+        }}
+        onClick={(event) => event.stopPropagation()}
+      >
+        {content}
       </div>
     </div>
   );
@@ -323,8 +374,14 @@ export function WorkspaceVisibilityModal({
 
 function SectionHeader({ label, count }: { label: string; count: number }) {
   return (
-    <div className="px-3 pb-1 pt-3 text-[10px] font-semibold uppercase tracking-wider text-telegram-subtext">
-      {label} ({count})
+    <div
+      className="sticky top-0 z-10 px-1 py-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-telegram-subtext/70 bg-telegram-surface/95 backdrop-blur-sm"
+      style={{ margin: 0 }}
+    >
+      {label}{' '}
+      <span className="font-normal text-telegram-subtext/50 normal-case tracking-normal">
+        ({count})
+      </span>
     </div>
   );
 }
@@ -332,13 +389,13 @@ function SectionHeader({ label, count }: { label: string; count: number }) {
 function Checkbox({ checked }: { checked: boolean }) {
   return (
     <span
-      className={`flex h-5 w-5 items-center justify-center rounded border transition-colors ${
+      className={`flex h-5 w-5 shrink-0 items-center justify-center rounded border transition-all duration-150 ${
         checked
-          ? 'border-telegram-primary bg-telegram-primary text-white'
-          : 'border-telegram-border bg-telegram-hover text-transparent'
+          ? 'border-telegram-primary bg-telegram-primary text-white shadow-sm'
+          : 'border-telegram-border bg-telegram-hover text-transparent hover:border-telegram-subtext/40'
       }`}
     >
-      <Check className="h-3.5 w-3.5" />
+      <Check className="h-3.5 w-3.5" strokeWidth={2.5} />
     </span>
   );
 }
