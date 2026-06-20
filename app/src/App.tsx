@@ -17,6 +17,7 @@ import { DropZoneProvider } from "./contexts/DropZoneContext";
 import { useInviteLink } from "./hooks/useInviteLink";
 import { InviteJoinModal } from "./components/dashboard/InviteJoinModal";
 import { NewGroupVisibilityPrompt } from "./components/dashboard/NewGroupVisibilityPrompt";
+import { FirstRunSetup } from "./components/FirstRunSetup";
 
 const queryClient = new QueryClient();
 
@@ -56,7 +57,7 @@ function LoadingScreen() {
 function AppContent() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [isCheckingAuth, setIsCheckingAuth] = useState(true);
-  const [showWorkspaceSetup, setShowWorkspaceSetup] = useState(false);
+  const [showFirstRun, setShowFirstRun] = useState(false);
   // Set after a successful join — tells Dashboard to open that group
   const [pendingGroupOpen, setPendingGroupOpen] = useState<{ id: number; name: string } | null>(null);
   // Set when performanceMode is on and user needs to decide visibility
@@ -101,7 +102,7 @@ function AppContent() {
               setIsAuthenticated(true);
               const prefs = await loadWorkspacePrefs();
               if (!prefs.firstRunCompleted) {
-                setShowWorkspaceSetup(true);
+                setShowFirstRun(true);
               }
             }
           }
@@ -191,12 +192,14 @@ function AppContent() {
             <motion.div key="loading" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="h-full w-full">
               <LoadingScreen />
             </motion.div>
+          ) : showFirstRun ? (
+            <motion.div key="firstrun" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="h-full w-full">
+              <FirstRunSetup onComplete={() => setShowFirstRun(false)} />
+            </motion.div>
           ) : isAuthenticated ? (
             <motion.div key="dashboard" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="h-full w-full">
               <Dashboard
                 onLogout={() => setIsAuthenticated(false)}
-                showWorkspaceSetup={showWorkspaceSetup}
-                onWorkspaceSetupComplete={() => setShowWorkspaceSetup(false)}
                 pendingGroupOpen={pendingGroupOpen}
                 onPendingGroupOpenConsumed={() => setPendingGroupOpen(null)}
               />

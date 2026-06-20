@@ -154,9 +154,6 @@ export function Sidebar({
     const loadInitialDirectory = async () => {
         try {
             const user = await invoke<CurrentUser | null>('cmd_get_current_user');
-            if (user) {
-                console.log('yes');
-            }
             setCurrentUser(user);
 
             const cached = readTelegramDirectoryCache<GroupInfo, ContactInfo>(user?.user_id || null);
@@ -168,18 +165,6 @@ export function Sidebar({
                 setTeamsHasMore(false);
                 setContactsHasMore(false);
             }
-
-            const [groupResp, contactResp] = await Promise.all([
-                invoke<{ teams: GroupInfo[]; next_before_date: number | null; has_more: boolean }>('cmd_get_teams'),
-                invoke<{ chats: ContactInfo[]; next_before_date: number | null; has_more: boolean }>('cmd_get_direct_chats'),
-            ]);
-            setGroups(groupResp.teams);
-            setContacts(contactResp.chats);
-            setTeamsBeforeDate(groupResp.next_before_date);
-            setContactsBeforeDate(contactResp.next_before_date);
-            setTeamsHasMore(groupResp.has_more);
-            setContactsHasMore(contactResp.has_more);
-            saveTelegramDirectoryCache(user?.user_id || null, groupResp.teams, contactResp.chats);
         } catch (e) {
             console.error('Failed to load Telegram directory:', e);
         }

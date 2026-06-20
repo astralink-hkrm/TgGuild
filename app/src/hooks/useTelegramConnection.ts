@@ -6,7 +6,7 @@ import { toast } from 'sonner';
 import { useConfirm } from '../context/ConfirmContext';
 import { TelegramFolder } from '../types';
 import { useNetworkStatus } from './useNetworkStatus';
-import { readTeamVisibility, isDriveVisible } from '../components/dashboard/teamVisibility';
+import { loadWorkspacePrefs, isDriveVisible as isDriveVisibleWs } from '../components/dashboard/workspaceVisibility';
 
 export function useTelegramConnection(onLogoutParent: () => void) {
     const queryClient = useQueryClient();
@@ -37,9 +37,9 @@ export function useTelegramConnection(onLogoutParent: () => void) {
         baseFolders: TelegramFolder[],
         showToast: boolean,
     ) => {
-        const visibility = readTeamVisibility();
-        const selectiveIds = visibility.selectiveSync 
-            ? baseFolders.filter(f => isDriveVisible(f.id, visibility)).map(f => f.id)
+        const prefs = await loadWorkspacePrefs();
+        const selectiveIds = prefs.performanceMode && prefs.visibleDrives.length > 0
+            ? baseFolders.filter(f => isDriveVisibleWs(f.id, prefs)).map(f => f.id)
             : null;
 
         const foundFolders = await invoke<TelegramFolder[]>('cmd_scan_folders', { selectiveIds });

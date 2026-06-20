@@ -25,6 +25,7 @@ import { ExternalDropBlocker } from './dashboard/ExternalDropBlocker';
 import { CreateFolderModal } from './dashboard/CreateFolderModal';
 import { OpeningOverlay } from './dashboard/OpeningOverlay';
 import { WorkspaceVisibilityModal } from './dashboard/WorkspaceVisibilityModal';
+import { saveTelegramDirectoryCache } from './dashboard/telegramCache';
 import { loadWorkspacePrefs, WorkspacePrefs } from './dashboard/workspaceVisibility';
 
 // Hooks
@@ -37,14 +38,12 @@ import { GROUP_JOINED_EVENT, GroupJoinedEventDetail } from '../events/groupEvent
 
 interface DashboardProps {
     onLogout: () => void;
-    showWorkspaceSetup?: boolean;
-    onWorkspaceSetupComplete?: () => void;
     /** When set, automatically open this group in the chat view */
     pendingGroupOpen?: { id: number; name: string } | null;
     onPendingGroupOpenConsumed?: () => void;
 }
 
-export function Dashboard({ onLogout, showWorkspaceSetup = false, onWorkspaceSetupComplete, pendingGroupOpen, onPendingGroupOpenConsumed }: DashboardProps) {
+export function Dashboard({ onLogout, pendingGroupOpen, onPendingGroupOpenConsumed }: DashboardProps) {
     const queryClient = useQueryClient();
 
     const {
@@ -97,19 +96,9 @@ export function Dashboard({ onLogout, showWorkspaceSetup = false, onWorkspaceSet
     const [activeMembers, setActiveMembers] = useState<any[]>([]);
     const [showAddSubscriber, setShowAddSubscriber] = useState(false);
     const [showWorkspaceSettings, setShowWorkspaceSettings] = useState(false);
-    const [currentUserId, setCurrentUserId] = useState<string | null>(null);
     const [contacts, setContacts] = useState<any[]>([]);
     const [workspacePrefs, setWorkspacePrefs] = useState<WorkspacePrefs | null>(null);
     const internalDragRef = useRef<number | null>(null);
-
-    const loadGroups = async () => {
-        try {
-            const resp = await invoke<{ teams: {id: number, name: string, username: string | null, member_count: number, photo_url?: string | null}[] }>('cmd_get_teams');
-            setGroups(resp.teams);
-        } catch (e) {
-            console.error('Failed to load groups:', e);
-        }
-    };
 
     const loadActiveMembers = async (id: number | null) => {
         if (id === null) {
@@ -125,20 +114,37 @@ export function Dashboard({ onLogout, showWorkspaceSetup = false, onWorkspaceSet
         }
     };
 
+    const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+
     useEffect(() => {
         const init = async () => {
-            await loadGroups();
-            try {
-                const resp = await invoke<{ chats: any[] }>('cmd_get_direct_chats');
-                setContacts(resp.chats);
-            } catch { /* ignore */ }
             const prefs = await loadWorkspacePrefs();
             setWorkspacePrefs(prefs);
+
+            const groupParams: Record<string, unknown> = {};
+            if (prefs.performanceMode && prefs.visibleGroups.length > 0) {
+                groupParams.selectiveIds = prefs.visibleGroups;
+            }
+            const [groupResp, user] = await Promise.all([
+                invoke<{ teams: {id: number, name: string, username: string | null, member_count: number, photo_url?: string | null}[] }>('cmd_get_teams', groupParams),
+                invoke<{ user_id: string } | null>('cmd_get_current_user'),
+            ]);
+            setCurrentUserId(user?.user_id || null);
+            setGroups(groupResp.teams);
+
+            const dmParams: Record<string, unknown> = {};
+            if (prefs.performanceMode && prefs.visibleDMs.length > 0) {
+                dmParams.selectiveIds = prefs.visibleDMs.map(id => Number(id));
+            }
+            try {
+                const contactResp = await invoke<{ chats: any[] }>('cmd_get_direct_chats', dmParams);
+                setContacts(contactResp.chats);
+                saveTelegramDirectoryCache(user?.user_id || null, groupResp.teams, contactResp.chats);
+            } catch {
+                saveTelegramDirectoryCache(user?.user_id || null, groupResp.teams, []);
+            }
         };
         init();
-        invoke<{ user_id: string } | null>('cmd_get_current_user')
-            .then((user) => setCurrentUserId(user?.user_id || null))
-            .catch(console.error);
     }, []);
 
     // Handle pending group open after invite join
@@ -759,23 +765,6 @@ export function Dashboard({ onLogout, showWorkspaceSetup = false, onWorkspaceSet
                     canManageMembers={activeGroupId !== null ? canManageActiveGroup : true}
                     onClose={() => setShowAddSubscriber(false)}
                     onSuccess={() => loadActiveMembers(activeFolderId || activeGroupId)}
-                />
-            )}
-
-            {showWorkspaceSetup && workspacePrefs && (
-                <WorkspaceVisibilityModal
-                    teams={groups}
-                    contacts={contacts}
-                    drives={folders.map(f => ({ id: f.id, name: f.name, username: null, member_count: f.member_count ?? 0 }))}
-                    prefs={workspacePrefs}
-                    mode="setup"
-                    onClose={() => {
-                        onWorkspaceSetupComplete?.();
-                    }}
-                    onSave={(prefs) => {
-                        setWorkspacePrefs(prefs);
-                        onWorkspaceSetupComplete?.();
-                    }}
                 />
             )}
 
