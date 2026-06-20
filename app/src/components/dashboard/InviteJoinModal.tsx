@@ -67,7 +67,14 @@ export function InviteJoinModal({ inviteUrl: _inviteUrl, groupInfo, onClose, onJ
             await ensureGroupVisible(groupId, groupInfo.group_name);
 
             // Broadcast realtime event so sidebar / panels refresh without reload
-            dispatchGroupJoined(groupId, groupInfo.group_name);
+            const currentUser = await invoke<{ user_id: string; first_name: string } | null>('cmd_get_current_user')
+                .catch(() => null);
+            dispatchGroupJoined(
+                groupId,
+                groupInfo.group_name,
+                currentUser?.user_id,
+                currentUser?.first_name,
+            );
 
             setStatus('success');
 

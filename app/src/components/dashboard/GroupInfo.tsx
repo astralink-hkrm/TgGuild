@@ -102,10 +102,17 @@ function OverviewTab({ groupId, info, onInfoChange, streamToken, streamBaseUrl }
     const [saving, setSaving] = useState(false);
     const [inviteLink, setInviteLink] = useState(info.invite_link || '');
     const [tgguildLink, setTgguildLink] = useState<string>('');
+    const [telegramLink, setTelegramLink] = useState<string>('');
 
-    // Convert existing invite link to TGGuild format
+    // Normalize links — the backend now returns tgguild:// format
     useEffect(() => {
-        if (inviteLink) {
+        if (!inviteLink) return;
+        if (inviteLink.startsWith('tgguild://')) {
+            setTgguildLink(inviteLink);
+            const hash = inviteLink.replace('tgguild://join/', '').split('?')[0];
+            setTelegramLink(`https://t.me/+${hash}`);
+        } else {
+            setTelegramLink(inviteLink);
             invoke<string>('cmd_to_tgguild_invite_link', { telegramLink: inviteLink })
                 .then(setTgguildLink)
                 .catch(() => setTgguildLink(''));
@@ -113,12 +120,12 @@ function OverviewTab({ groupId, info, onInfoChange, streamToken, streamBaseUrl }
     }, [inviteLink]);
 
     const handleCopyLink = async () => {
-        const link = tgguildLink || inviteLink;
+        const link = telegramLink;
         if (!link) return;
         try {
             await navigator.clipboard.writeText(link);
             setCopied(true);
-            toast.success('Invite link copied');
+            toast.success('Telegram link copied');
             setTimeout(() => setCopied(false), 2000);
         } catch {
             toast.error('Failed to copy');
@@ -282,17 +289,24 @@ function OverviewTab({ groupId, info, onInfoChange, streamToken, streamBaseUrl }
                                     >
                                         {copiedTgguild ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
                                     </button>
+                                    <button
+                                        onClick={handleRevokeLink}
+                                        className="rounded-lg bg-orange-500/10 p-2 text-orange-400 hover:bg-orange-500/20 transition-colors"
+                                        title="Generate new link"
+                                    >
+                                        <RefreshCw className="h-4 w-4" />
+                                    </button>
                                 </div>
                             </div>
                         )}
-                        {/* Telegram link */}
+                        {/* Telegram fallback link */}
                         <div>
                             <p className="text-[10px] text-telegram-subtext mb-1">Telegram Link</p>
                             <div className="flex items-center gap-2">
                                 <input
                                     type="text"
                                     readOnly
-                                    value={inviteLink}
+                                    value={telegramLink}
                                     className="flex-1 rounded-lg bg-telegram-surface border border-telegram-border px-3 py-1.5 text-sm text-telegram-text outline-none"
                                     onClick={(e) => (e.target as HTMLInputElement).select()}
                                 />
@@ -302,13 +316,6 @@ function OverviewTab({ groupId, info, onInfoChange, streamToken, streamBaseUrl }
                                     title="Copy link"
                                 >
                                     {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
-                                </button>
-                                <button
-                                    onClick={handleRevokeLink}
-                                    className="rounded-lg bg-orange-500/10 p-2 text-orange-400 hover:bg-orange-500/20 transition-colors"
-                                    title="Generate new link"
-                                >
-                                    <RefreshCw className="h-4 w-4" />
                                 </button>
                             </div>
                         </div>
