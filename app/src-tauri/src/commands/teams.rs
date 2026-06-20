@@ -1335,11 +1335,7 @@ pub async fn cmd_get_team_invite_link(
         .map_err(|e| format!("Failed to create invite link: {}", e))?;
 
     match exported {
-        tl::enums::ExportedChatInvite::ChatInviteExported(invite) => {
-            let hash = extract_invite_hash(&invite.link)
-                .ok_or_else(|| format!("Unexpected invite link format: {}", invite.link))?;
-            Ok(format!("tgguild://join/{}", hash))
-        }
+        tl::enums::ExportedChatInvite::ChatInviteExported(invite) => Ok(invite.link),
         tl::enums::ExportedChatInvite::ChatInvitePublicJoinRequests => {
             Err("This group is set to require join approval. Invite links are not available.".to_string())
         }
@@ -1375,11 +1371,7 @@ pub async fn cmd_revoke_invite_link(
         .map_err(|e| format!("Failed to create new invite link: {}", e))?;
 
     match exported {
-        tl::enums::ExportedChatInvite::ChatInviteExported(invite) => {
-            let hash = extract_invite_hash(&invite.link)
-                .ok_or_else(|| format!("Unexpected invite link format: {}", invite.link))?;
-            Ok(format!("tgguild://join/{}", hash))
-        }
+        tl::enums::ExportedChatInvite::ChatInviteExported(invite) => Ok(invite.link),
         tl::enums::ExportedChatInvite::ChatInvitePublicJoinRequests => {
             Err("This group requires join approval. Invite links not available.".to_string())
         }

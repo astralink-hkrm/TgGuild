@@ -124,8 +124,7 @@ export function Sidebar({
             const detail = (e as CustomEvent<GroupJoinedEventDetail>).detail;
             if (!detail?.groupId) return;
 
-            // Add the group optimistically - no API call needed because
-            // ensureGroupVisible already updated the directory cache.
+            // Add the group optimistically if not already present, then do a full refresh
             setGroups(prev => {
                 const exists = prev.some(g => g.id === detail.groupId);
                 if (exists) return prev;
@@ -142,14 +141,18 @@ export function Sidebar({
                 ];
             });
 
-            // Reload workspacePrefs to pick up visibility changes
-            // made by ensureGroupVisible (e.g. adding to visibleGroups).
-            loadWorkspacePrefs().then(setWorkspacePrefs);
+            // Refresh from Telegram to get accurate data
+            invoke<{ teams: GroupInfo[] }>('cmd_get_teams')
+                .then(resp => {
+                    setGroups(resp.teams);
+                    saveTelegramDirectoryCache(currentUser?.user_id || null, resp.teams, contacts);
+                })
+                .catch(console.error);
         };
 
         window.addEventListener(GROUP_JOINED_EVENT, handler);
         return () => window.removeEventListener(GROUP_JOINED_EVENT, handler);
-    }, []);
+    }, [contacts, currentUser]);
 
     const loadInitialDirectory = async () => {
         try {

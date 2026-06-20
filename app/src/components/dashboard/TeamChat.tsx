@@ -1038,7 +1038,7 @@ export function TeamChat({
         setShowThreeDotMenu(false);
         if (!groupId) return;
         try {
-            const link = await invoke<string>('cmd_get_tgguild_invite_link', { teamId: groupId });
+            const link = await invoke<string>('cmd_get_team_invite_link', { teamId: groupId });
             await navigator.clipboard.writeText(link);
             toast.success('Invite link copied to clipboard!');
         } catch (e) {

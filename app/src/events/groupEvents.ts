@@ -12,25 +12,16 @@ export interface GroupJoinedEventDetail {
     groupId: number;
     /** Display name of the joined group */
     groupName: string;
-    /** ID of the member who joined */
-    memberId?: string;
-    /** Name of the member who joined */
-    memberName?: string;
 }
 
 /**
  * Dispatch a group_joined event so all interested components can update.
  * This replaces the need for a hard page refresh after joining a group.
  */
-export function dispatchGroupJoined(
-    groupId: number,
-    groupName: string,
-    memberId?: string,
-    memberName?: string,
-): void {
+export function dispatchGroupJoined(groupId: number, groupName: string): void {
     window.dispatchEvent(
         new CustomEvent<GroupJoinedEventDetail>(GROUP_JOINED_EVENT, {
-            detail: { groupId, groupName, memberId, memberName },
+            detail: { groupId, groupName },
         })
     );
 }

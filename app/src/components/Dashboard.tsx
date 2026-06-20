@@ -158,17 +158,20 @@ export function Dashboard({ onLogout, showWorkspaceSetup = false, onWorkspaceSet
         onPendingGroupOpenConsumed?.();
     }, [pendingGroupOpen]);
 
-    // Listen for group_joined events — just switch to the group immediately.
-    // No API call needed; ensureGroupVisible already updated the cache.
+    // Listen for group_joined events (from invite join flow) to refresh state without reload
     useEffect(() => {
         const handler = (e: Event) => {
             const detail = (e as CustomEvent<GroupJoinedEventDetail>).detail;
             if (!detail?.groupId) return;
 
-            setActiveGroupId(detail.groupId);
-            setActiveFolderId(null);
-            setActiveCompanyManagement(false);
-            setActiveDirectChat(null);
+            // Refresh the groups list to pick up the new group
+            loadGroups().then(() => {
+                // Switch to the newly joined group
+                setActiveGroupId(detail.groupId);
+                setActiveFolderId(null);
+                setActiveCompanyManagement(false);
+                setActiveDirectChat(null);
+            });
         };
 
         window.addEventListener(GROUP_JOINED_EVENT, handler);
