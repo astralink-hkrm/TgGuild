@@ -30,6 +30,8 @@ import {
     ArrowDown,
     Check,
     CheckCheck,
+    CheckSquare,
+    Square,
     Users,
     Info,
     Link2,
@@ -206,6 +208,7 @@ export function TeamChat({
     const [showForwardModal, setShowForwardModal] = useState(false);
     const [showStarredView, setShowStarredView] = useState(false);
     const [selectedMessageIds, setSelectedMessageIds] = useState<Set<number>>(new Set());
+    const [selectionMode, setSelectionMode] = useState(false);
     const [showSelectionDelete, setShowSelectionDelete] = useState(false);
     const [starStatus, setStarStatus] = useState<Record<string, boolean>>({});
 
@@ -630,15 +633,25 @@ export function TeamChat({
 
     const handleToggleSelect = (messageId: number) => {
         setSelectedMessageIds(prev => {
+            const wasInSet = prev.has(messageId);
             const next = new Set(prev);
-            if (next.has(messageId)) next.delete(messageId);
-            else next.add(messageId);
+            if (wasInSet) {
+                next.delete(messageId);
+            } else {
+                next.add(messageId);
+            }
+            if (next.size === 0) {
+                setSelectionMode(false);
+            } else if (!wasInSet) {
+                setSelectionMode(true);
+            }
             return next;
         });
     };
 
     const handleCancelSelection = () => {
         setSelectedMessageIds(new Set());
+        setSelectionMode(false);
     };
 
     const handleSelectionDelete = async (revoke: boolean) => {
@@ -666,6 +679,7 @@ export function TeamChat({
             toast.success(`Deleted ${deletedIds.size} message${deletedIds.size > 1 ? 's' : ''}`);
             setShowSelectionDelete(false);
             setSelectedMessageIds(new Set());
+            setSelectionMode(false);
         } catch (e) {
             toast.error(`Failed to delete: ${e}`);
         }
@@ -691,6 +705,7 @@ export function TeamChat({
         }
         toast.success(`Starred ${selectedMessageIds.size} message${selectedMessageIds.size > 1 ? 's' : ''}`);
         setSelectedMessageIds(new Set());
+        setSelectionMode(false);
     };
 
     const handleSelectionCopy = async () => {
@@ -707,6 +722,7 @@ export function TeamChat({
             }
         }
         setSelectedMessageIds(new Set());
+        setSelectionMode(false);
     };
 
     const handleVoice = async () => {
@@ -1591,12 +1607,26 @@ export function TeamChat({
                                             }}
                                         />
                                     ) : (
-                                    <div className={`group flex ${outgoing ? 'justify-end' : 'justify-start'}`}>
+                                    <div
+                                        className={`group flex items-start gap-1 ${outgoing ? 'justify-end' : ''} ${selectionMode ? 'cursor-pointer' : ''}`}
+                                        onClick={selectionMode ? (e) => { e.stopPropagation(); handleToggleSelect(msg.id); } : undefined}
+                                    >
+                                        {selectionMode && (
+                                            <button
+                                                onClick={(e) => { e.stopPropagation(); handleToggleSelect(msg.id); }}
+                                                className="mt-3 shrink-0 p-1 rounded-full hover:bg-telegram-hover transition-colors"
+                                            >
+                                                {selectedMessageIds.has(msg.id)
+                                                    ? <CheckSquare className="w-5 h-5 text-telegram-primary" />
+                                                    : <Square className="w-5 h-5 text-telegram-subtext" />
+                                                }
+                                            </button>
+                                        )}
                                         <div className={`relative flex gap-2 max-w-[78%] ${outgoing ? 'flex-row-reverse' : ''}`}>
                                             {!outgoing && !isDirect && (
                                                 <div
                                                     className="cursor-pointer"
-                                                    onClick={() => onOpenDirectChat?.({ user_id: msg.sender_id, first_name: msg.sender_name, photo_url: msg.sender_photo_url })}
+                                                    onClick={selectionMode ? (e) => { e.stopPropagation(); handleToggleSelect(msg.id); } : () => onOpenDirectChat?.({ user_id: msg.sender_id, first_name: msg.sender_name, photo_url: msg.sender_photo_url })}
                                                 >
                                                     <TelegramAvatar
                                                         user={{ user_id: msg.sender_id, first_name: msg.sender_name, photo_url: msg.sender_photo_url }}
