@@ -5,6 +5,7 @@ import { toast } from 'sonner';
 import { formatDateOnly } from '../../utils';
 import { TelegramAvatar } from './TelegramAvatar';
 import { GroupMembersPanel } from './GroupMembersPanel';
+import { dispatchGroupLeft } from '../../events/groupEvents';
 
 interface TeamFullInfo {
     id: number;
@@ -630,7 +631,7 @@ function SettingsTab({ groupId, info, onClose, isDirect }: {
             await invoke('cmd_leave_team', { teamId: groupId });
             toast.success('Left the group');
             onClose();
-            window.location.reload();
+            dispatchGroupLeft(groupId);
         } catch (e) {
             toast.error(`Failed to leave: ${e}`);
         }
@@ -642,7 +643,7 @@ function SettingsTab({ groupId, info, onClose, isDirect }: {
             await invoke('cmd_delete_team', { teamId: groupId });
             toast.success('Group deleted');
             onClose();
-            window.location.reload();
+            dispatchGroupLeft(groupId);
         } catch (e) {
             toast.error(`Failed to delete: ${e}`);
         }

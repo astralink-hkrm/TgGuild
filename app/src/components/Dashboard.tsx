@@ -34,7 +34,7 @@ import { useFileOperations } from '../hooks/useFileOperations';
 import { useFileUpload } from '../hooks/useFileUpload';
 import { useFileDownload } from '../hooks/useFileDownload';
 import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
-import { GROUP_JOINED_EVENT, GroupJoinedEventDetail } from '../events/groupEvents';
+import { GROUP_JOINED_EVENT, GROUP_LEFT_EVENT, GroupJoinedEventDetail, GroupLeftEventDetail } from '../events/groupEvents';
 
 interface DashboardProps {
     onLogout: () => void;
@@ -183,6 +183,19 @@ export function Dashboard({ onLogout, pendingGroupOpen, onPendingGroupOpenConsum
 
         window.addEventListener(GROUP_JOINED_EVENT, handler);
         return () => window.removeEventListener(GROUP_JOINED_EVENT, handler);
+    }, []);
+
+    // Listen for group_left events — navigate away and remove from state.
+    useEffect(() => {
+        const handler = (e: Event) => {
+            const detail = (e as CustomEvent<GroupLeftEventDetail>).detail;
+            if (!detail?.groupId) return;
+
+            setGroups(prev => prev.filter(g => g.id !== detail.groupId));
+            setActiveGroupId(prev => prev === detail.groupId ? null : prev);
+        };
+        window.addEventListener(GROUP_LEFT_EVENT, handler);
+        return () => window.removeEventListener(GROUP_LEFT_EVENT, handler);
     }, []);
 
     useEffect(() => {

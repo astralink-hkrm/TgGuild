@@ -20,7 +20,7 @@ import { readTelegramDirectoryCache, saveTelegramDirectoryCache, readTelegramMes
 import { TelegramFolder, BandwidthStats } from '../../types';
 import { parseDate } from '../../utils';
 import { TypingUserData, PresenceData } from '../../hooks/useRealtime';
-import { GROUP_JOINED_EVENT, GroupJoinedEventDetail } from '../../events/groupEvents';
+import { GROUP_JOINED_EVENT, GROUP_LEFT_EVENT, GroupJoinedEventDetail, GroupLeftEventDetail } from '../../events/groupEvents';
 
 interface GroupInfo {
     id: number;
@@ -149,6 +149,16 @@ export function Sidebar({
 
         window.addEventListener(GROUP_JOINED_EVENT, handler);
         return () => window.removeEventListener(GROUP_JOINED_EVENT, handler);
+    }, []);
+
+    useEffect(() => {
+        const handler = (e: Event) => {
+            const detail = (e as CustomEvent<GroupLeftEventDetail>).detail;
+            if (!detail?.groupId) return;
+            setGroups(prev => prev.filter(g => g.id !== detail.groupId));
+        };
+        window.addEventListener(GROUP_LEFT_EVENT, handler);
+        return () => window.removeEventListener(GROUP_LEFT_EVENT, handler);
     }, []);
 
     const loadInitialDirectory = async () => {

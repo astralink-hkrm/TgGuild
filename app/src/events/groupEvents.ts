@@ -6,6 +6,7 @@
  */
 
 export const GROUP_JOINED_EVENT = 'tgguild:group_joined';
+export const GROUP_LEFT_EVENT = 'tgguild:group_left';
 
 export interface GroupJoinedEventDetail {
     /** Telegram group ID */
@@ -16,6 +17,11 @@ export interface GroupJoinedEventDetail {
     memberId?: string;
     /** Name of the member who joined */
     memberName?: string;
+}
+
+export interface GroupLeftEventDetail {
+    /** Telegram group ID that was left */
+    groupId: number;
 }
 
 /**
@@ -31,6 +37,18 @@ export function dispatchGroupJoined(
     window.dispatchEvent(
         new CustomEvent<GroupJoinedEventDetail>(GROUP_JOINED_EVENT, {
             detail: { groupId, groupName, memberId, memberName },
+        })
+    );
+}
+
+/**
+ * Dispatch a group_left event so components can remove the group from UI
+ * without requiring a hard page refresh.
+ */
+export function dispatchGroupLeft(groupId: number): void {
+    window.dispatchEvent(
+        new CustomEvent<GroupLeftEventDetail>(GROUP_LEFT_EVENT, {
+            detail: { groupId },
         })
     );
 }

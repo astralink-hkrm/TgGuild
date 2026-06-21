@@ -51,6 +51,7 @@ import { MessageActions } from './MessageActions';
 import { SystemMessage } from './SystemMessage';
 import { useConfirm } from '../../context/ConfirmContext';
 import { GroupMembersPanel } from './GroupMembersPanel';
+import { dispatchGroupLeft } from '../../events/groupEvents';
 import { PinnedMessagesBar } from './PinnedMessagesBar';
 import { ForwardPickerModal } from './ForwardPickerModal';
 import { StarredMessages } from './StarredMessages';
@@ -1081,7 +1082,7 @@ export function TeamChat({
         if (!confirmed) return;
         try {
             await invoke('cmd_leave_team', { teamId: groupId });
-            window.location.reload();
+            dispatchGroupLeft(groupId);
         } catch (e) {
             console.error('Failed to leave:', e);
         }
