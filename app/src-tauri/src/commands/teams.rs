@@ -2376,7 +2376,17 @@ pub async fn cmd_get_team_messages(
         };
 
         let media = msg.media();
-        let text = msg.text().to_string();
+        let raw_text = msg.text().to_string();
+        let text = if raw_text.starts_with("TGGuild_") {
+            let first_line = raw_text.lines().next().unwrap_or(&raw_text);
+            if first_line.starts_with("TGGuild_FILE_V1:") || first_line.starts_with("TGGuild_FOLDER_V1:") {
+                String::new()
+            } else {
+                raw_text
+            }
+        } else {
+            raw_text
+        };
         let mut message_type = "text".to_string();
         let mut action_params: Option<String> = None;
 
@@ -2479,7 +2489,14 @@ pub async fn cmd_get_team_messages(
                             "file"
                         }.to_string();
 
-                        let display = if !text.is_empty() { text } else { name.to_string() };
+                        let default_display = match file_type.as_str() {
+                            "image" => "[Image]",
+                            "video" => "[Video]",
+                            "audio" => "[Audio]",
+                            "voice" => "[Voice]",
+                            _ => &name,
+                        }.to_string();
+                        let display = if !text.is_empty() { text } else { default_display };
                         (true, file_type, name.to_string(), size, mime, display, duration)
                     }
                     _ => {

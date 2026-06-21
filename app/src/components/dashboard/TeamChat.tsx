@@ -1651,8 +1651,15 @@ export function TeamChat({
                                                             <button onClick={() => handleDownload(msg)} className="block max-w-80 overflow-hidden rounded-xl bg-black/5">
                                                                 <img src={mediaStreamUrl(msg) || ''} alt="" className="max-h-80 w-full object-cover" />
                                                             </button>
-                                                        ) : null}
-                                                        {msg.media_type === 'voice' ? (
+                                                        ) : msg.media_type === 'video' && mediaStreamUrl(msg) ? (
+                                                            <button onClick={() => handleDownload(msg)} className="block max-w-80 overflow-hidden rounded-xl bg-black/5">
+                                                                <video src={mediaStreamUrl(msg) || ''} className="max-h-80 w-full object-cover" controls />
+                                                            </button>
+                                                        ) : msg.media_type === 'audio' && mediaStreamUrl(msg) ? (
+                                                            <div className={`rounded-xl p-3 ${outgoing ? 'bg-telegram-primary/20' : 'bg-telegram-hover'}`}>
+                                                                <audio src={mediaStreamUrl(msg) || ''} controls className="w-full" />
+                                                            </div>
+                                                        ) : msg.media_type === 'voice' ? (
                                                             <div className={`rounded-xl p-3 ${outgoing ? 'bg-telegram-primary/20' : 'bg-telegram-hover'}`}>
                                                                 <VoiceMessage
                                                                     streamUrl={mediaStreamUrl(msg)}
@@ -1660,7 +1667,7 @@ export function TeamChat({
                                                                     pending={msg.pending}
                                                                 />
                                                             </div>
-                                                        ) : ['photo', 'image'].includes(msg.media_type) ? null : (
+                                                        ) : ['photo', 'image', 'video', 'audio'].includes(msg.media_type) ? null : (
                                                         <button
                                                             onClick={() => handleDownload(msg)}
                                                             disabled={downloadingId === msg.id || msg.pending}
@@ -1680,7 +1687,7 @@ export function TeamChat({
                                                         )}
                                                     </div>
                                                 )}
-                                                {msg.text && (
+                                                {msg.text && !(/^\[(Image|Video|Audio|Voice)\]$/.test(msg.text)) && (
                                                     <p className="whitespace-pre-wrap break-words text-sm leading-relaxed">
                                                         {renderMessageContent(msg.text)}
                                                     </p>
@@ -1856,7 +1863,7 @@ export function TeamChat({
                             <div className="h-8 w-0.5 shrink-0 rounded-full bg-telegram-primary" />
                             <div className="min-w-0 flex-1">
                                 <p className="text-xs font-medium text-telegram-primary truncate">{replyTo.sender_name}</p>
-                                <p className="text-xs text-telegram-subtext truncate">{replyTo.text || replyTo.media_name || 'Media'}</p>
+                                <p className="text-xs text-telegram-subtext truncate">{(["photo", "image", "video", "audio", "voice"].includes(replyTo.media_type) && (!replyTo.text || /^\[(Image|Video|Audio|Voice|Photo)\]$/.test(replyTo.text) || replyTo.text === replyTo.media_name)) ? replyTo.media_type.charAt(0).toUpperCase() + replyTo.media_type.slice(1) : replyTo.text || replyTo.media_name || 'Media'}</p>
                             </div>
                             <button
                                 onClick={(e) => { e.stopPropagation(); setReplyTo(null); }}
@@ -2130,7 +2137,7 @@ export function TeamChat({
                             {showMessageInfo.has_media && showMessageInfo.media_name && (
                                 <div>
                                     <span className="text-telegram-subtext text-xs">File</span>
-                                    <p className="text-telegram-text truncate">{showMessageInfo.media_name}</p>
+                                    <p className="text-telegram-text truncate">{["document", "file"].includes(showMessageInfo.media_type) ? showMessageInfo.media_name : showMessageInfo.media_type.charAt(0).toUpperCase() + showMessageInfo.media_type.slice(1)}</p>
                                 </div>
                             )}
                             {showMessageInfo.outgoing && (

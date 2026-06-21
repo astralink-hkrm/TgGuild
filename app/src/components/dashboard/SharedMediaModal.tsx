@@ -99,7 +99,7 @@ export function SharedMediaModal({ messages, groupName, onClose, onDownload, for
                                     </span>
                                     <div className="min-w-0 flex-1">
                                         <p className="truncate text-sm font-medium text-telegram-text">
-                                            {msg.media_name || msg.media_type}
+                                            {["photo", "image", "video", "audio", "voice"].includes(msg.media_type) ? msg.media_type.charAt(0).toUpperCase() + msg.media_type.slice(1) : msg.media_name || msg.media_type}
                                         </p>
                                         <p className="text-xs text-telegram-subtext">
                                             {msg.sender_name} · {formatTime(msg.date)}

@@ -383,7 +383,7 @@ function MediaGrid({ items, type }: { items: ChatMessage[]; type: string }) {
                     ) : (
                         <div className="w-full h-full flex flex-col items-center justify-center p-2">
                             <Icon className="h-6 w-6 text-telegram-primary/60 mb-1" />
-                            <p className="text-[10px] text-telegram-subtext text-center truncate w-full">{msg.media_name}</p>
+                            <p className="text-[10px] text-telegram-subtext text-center truncate w-full">{["photo", "image", "video", "audio", "voice"].includes(msg.media_type) ? msg.media_type.charAt(0).toUpperCase() + msg.media_type.slice(1) : msg.media_name}</p>
                             {msg.media_size > 0 && (
                                 <p className="text-[9px] text-telegram-subtext/60">{formatFileSize(msg.media_size)}</p>
                             )}
