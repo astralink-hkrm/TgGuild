@@ -139,7 +139,7 @@ export function VoiceMessage({ streamUrl, duration, pending }: VoiceMessageProps
                 >
                     <div className="relative w-full h-1 rounded-full bg-telegram-hover overflow-hidden">
                         <div
-                            className="absolute left-0 top-0 h-full rounded-full bg-telegram-primary transition-[width] duration-100"
+                            className="absolute left-0 top-0 h-full rounded-full bg-gradient-to-r from-telegram-primary to-amber-500"
                             style={{ width: `${Math.min(progress, 100)}%` }}
                         />
                         <div
