@@ -12,7 +12,7 @@ interface TelegramAvatarProps {
     user: AvatarUser;
     token?: string;
     baseUrl?: string;
-    size?: 'sm' | 'md' | 'lg';
+    size?: 'sm' | 'md' | 'lg' | 'xl';
     className?: string;
 }
 
@@ -20,6 +20,7 @@ const sizeClasses = {
     sm: 'w-6 h-6 text-[10px]',
     md: 'w-8 h-8 text-xs',
     lg: 'w-10 h-10 text-sm',
+    xl: 'w-24 h-24 text-2xl',
 };
 
 const colors = [
