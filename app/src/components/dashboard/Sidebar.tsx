@@ -259,6 +259,17 @@ export function Sidebar({
         await loadMoreDirectChats();
     };
 
+    const handleOpenVisibilitySettings = async () => {
+        // Ensure full data is loaded before opening modal
+        await Promise.all([
+            loadGroups(),
+            invoke<{ chats: ContactInfo[]; next_before_date: number | null; has_more: boolean }>('cmd_get_direct_chats')
+                .then(resp => setContacts(resp.chats))
+                .catch(console.error),
+        ]);
+        setShowVisibilitySettings(true);
+    };
+
     useEffect(() => {
         const msgs: Record<string, CachedMessagePreview | null> = {};
         for (const group of groups) {
@@ -479,7 +490,7 @@ export function Sidebar({
                             {driveExpanded ? <ChevronDown className="w-3 h-3 text-telegram-subtext" /> : <ChevronRight className="w-3 h-3 text-telegram-subtext" />}
                         </button>
                         <button
-                            onClick={() => setShowVisibilitySettings(true)}
+                            onClick={handleOpenVisibilitySettings}
                             className="ml-2 rounded-md p-1 text-telegram-subtext hover:bg-telegram-hover hover:text-telegram-text"
                             title="Choose visible drives"
                         >
@@ -572,7 +583,7 @@ export function Sidebar({
                             {teamsExpanded ? <ChevronDown className="w-3 h-3 text-telegram-subtext" /> : <ChevronRight className="w-3 h-3 text-telegram-subtext" />}
                         </button>
                         <button
-                            onClick={() => setShowVisibilitySettings(true)}
+                            onClick={handleOpenVisibilitySettings}
                             className="ml-2 rounded-md p-1 text-telegram-subtext hover:bg-telegram-hover hover:text-telegram-text"
                             title="Choose visible teams"
                         >
@@ -823,10 +834,17 @@ export function Sidebar({
                     streamToken={streamToken}
                     mode="settings"
                     onClose={() => setShowVisibilitySettings(false)}
-                    onSave={(prefs) => {
+                    onSave={async (prefs) => {
                         setWorkspacePrefs(prefs);
                         saveWorkspacePrefs(prefs);
                         setShowVisibilitySettings(false);
+                        loadGroups();
+                        try {
+                            const resp = await invoke<{ chats: ContactInfo[]; next_before_date: number | null; has_more: boolean }>('cmd_get_direct_chats');
+                            setContacts(resp.chats);
+                        } catch (e) {
+                            console.error('Failed to reload contacts:', e);
+                        }
                     }}
                 />
             )}

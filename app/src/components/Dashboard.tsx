@@ -139,9 +139,13 @@ export function Dashboard({ onLogout, pendingGroupOpen, onPendingGroupOpenConsum
             try {
                 const contactResp = await invoke<{ chats: any[] }>('cmd_get_direct_chats', dmParams);
                 setContacts(contactResp.chats);
-                saveTelegramDirectoryCache(user?.user_id || null, groupResp.teams, contactResp.chats);
+                if (!groupParams.selectiveIds) {
+                    saveTelegramDirectoryCache(user?.user_id || null, groupResp.teams, contactResp.chats);
+                }
             } catch {
-                saveTelegramDirectoryCache(user?.user_id || null, groupResp.teams, []);
+                if (!groupParams.selectiveIds) {
+                    saveTelegramDirectoryCache(user?.user_id || null, groupResp.teams, []);
+                }
             }
         };
         init();
@@ -776,9 +780,19 @@ export function Dashboard({ onLogout, pendingGroupOpen, onPendingGroupOpenConsum
                     prefs={workspacePrefs}
                     mode="settings"
                     onClose={() => setShowWorkspaceSettings(false)}
-                    onSave={(prefs) => {
+                    onSave={async (prefs) => {
                         setWorkspacePrefs(prefs);
                         setShowWorkspaceSettings(false);
+                        try {
+                            const [groupResp, contactResp] = await Promise.all([
+                                invoke<{ teams: {id: number, name: string, username: string | null, member_count: number, photo_url?: string | null}[] }>('cmd_get_teams'),
+                                invoke<{ chats: any[] }>('cmd_get_direct_chats'),
+                            ]);
+                            setGroups(groupResp.teams);
+                            setContacts(contactResp.chats);
+                        } catch (e) {
+                            console.error('Failed to reload data:', e);
+                        }
                     }}
                 />
             )}
