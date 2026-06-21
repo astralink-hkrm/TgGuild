@@ -630,6 +630,7 @@ export function Sidebar({
                                             setActiveGroupId(group.id);
                                             setActiveDirectChat(null);
                                             setActiveFolderId(null);
+                                            setGroups(prev => prev.map(g => g.id === group.id ? { ...g, unread_count: 0 } : g));
                                         }}
                                         className={`w-full relative flex items-center gap-3 px-3 py-2 rounded-lg text-xs font-medium transition-all ${
                                             activeGroupId === group.id
@@ -660,7 +661,7 @@ export function Sidebar({
                                         </div>
                                         <div className="flex items-center gap-1 self-start mt-0.5">
                                             {Boolean(group.unread_count) && (
-                                                <span className={`rounded-full ${activeGroupId === group.id ? 'h-2 w-2 bg-telegram-primary' : 'h-2 w-2 bg-telegram-primary'}`} title={`${group.unread_count} unread`} />
+                                                <span className="h-2 w-2 rounded-full bg-telegram-primary" title={`${group.unread_count} unread`} />
                                             )}
                                             {sortedMembers.length > 0 && (
                                                 <MemberStack members={sortedMembers} size="sm" maxDisplay={3} />
@@ -730,6 +731,7 @@ export function Sidebar({
                                                 setActiveGroupId(null);
                                                 setActiveFolderId(null);
                                                 setActiveDirectChat(contact);
+                                                setContacts(prev => prev.map(c => String(c.user_id) === String(contact.user_id) ? { ...c, unread_count: 0 } : c));
                                             }}
                                             className={`flex w-full relative items-center gap-3 rounded-lg px-3 py-2 text-xs font-medium transition-all ${
                                                 activeDirectChatId === contact.user_id
