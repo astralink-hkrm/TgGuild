@@ -155,12 +155,12 @@ export function WorkspaceVisibilityModal({
   const content = (
     <>
       {/* Fixed Header */}
-      <div className="flex items-start justify-between gap-4 px-8 pt-7 pb-5">
+      <div className="flex items-start justify-between gap-4 px-8 pt-5 pb-3">
         <div className="min-w-0 flex-1">
-          <h2 className="text-lg font-semibold text-telegram-text leading-snug">
+          <h2 className="text-base font-semibold text-telegram-text leading-snug">
             {mode === 'setup' ? 'Choose What To Display' : 'Workspace Visibility'}
           </h2>
-          <p className="text-sm text-telegram-subtext mt-1.5 leading-relaxed">
+          <p className="text-xs text-telegram-subtext mt-1 leading-relaxed">
             {mode === 'setup'
               ? 'Select the drives, groups, and conversations you want visible in your workspace.'
               : 'Manage which items appear in your sidebar.'}
@@ -175,27 +175,27 @@ export function WorkspaceVisibilityModal({
       </div>
 
       {/* Fixed Controls */}
-      <div className="px-8 pb-4 space-y-3">
+      <div className="px-8 pb-3 space-y-2">
         <div className="relative">
-          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-telegram-subtext" />
+          <Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-telegram-subtext" />
           <input
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             placeholder="Search drives, groups or people"
-            className="w-full rounded-lg border border-telegram-border bg-telegram-hover py-2.5 pl-10 pr-3 text-sm text-telegram-text outline-none placeholder:text-telegram-subtext/60 focus:border-telegram-primary/50 focus:bg-telegram-bg transition-colors"
+            className="w-full rounded-lg border border-telegram-border bg-telegram-hover py-2 pl-9 pr-3 text-sm text-telegram-text outline-none placeholder:text-telegram-subtext/60 focus:border-telegram-primary/50 focus:bg-telegram-bg transition-colors"
           />
         </div>
 
         <button
           onClick={() => setDraft(prev => ({ ...prev, performanceMode: !prev.performanceMode }))}
-          className="flex w-full items-center gap-3 rounded-lg border border-telegram-border bg-telegram-hover/30 px-4 py-3 text-left hover:bg-telegram-hover/60 transition-colors"
+          className="flex w-full items-center gap-3 rounded-lg border border-telegram-border bg-telegram-hover/30 px-3 py-2 text-left hover:bg-telegram-hover/60 transition-colors"
         >
-          <div className={`flex h-5 w-9 shrink-0 items-center rounded-full px-0.5 transition-colors ${draft.performanceMode ? 'bg-telegram-primary' : 'bg-telegram-subtext/40'}`}>
-            <div className={`h-4 w-4 rounded-full bg-white shadow-sm transition-transform ${draft.performanceMode ? 'translate-x-4' : 'translate-x-0'}`} />
+          <div className={`flex h-4 w-8 shrink-0 items-center rounded-full px-0.5 transition-colors ${draft.performanceMode ? 'bg-telegram-primary' : 'bg-telegram-subtext/40'}`}>
+            <div className={`h-3 w-3 rounded-full bg-white shadow-sm transition-transform ${draft.performanceMode ? 'translate-x-4' : 'translate-x-0'}`} />
           </div>
           <div className="min-w-0 flex-1">
-            <p className="text-sm font-medium text-telegram-text">Selective Sync (Performance Mode)</p>
-            <p className="text-xs text-telegram-subtext/80 leading-relaxed mt-0.5">
+            <p className="text-xs font-medium text-telegram-text">Selective Sync (Performance Mode)</p>
+            <p className="text-[11px] text-telegram-subtext/80 leading-relaxed mt-0.5">
               Only load data for selected items. Speeds up app startup and reduces memory usage.
             </p>
           </div>
@@ -204,13 +204,13 @@ export function WorkspaceVisibilityModal({
         {draft.performanceMode && (
           <button
             onClick={toggleAll}
-            className="flex w-full items-center gap-3 rounded-lg px-2 py-2 text-left hover:bg-telegram-hover transition-colors"
+            className="flex w-full items-center gap-3 rounded-lg px-2 py-1.5 text-left hover:bg-telegram-hover transition-colors"
           >
             <Checkbox checked={allSelected} />
-            <span className="text-sm font-medium text-telegram-text">
+            <span className="text-xs font-medium text-telegram-text">
               {allSelected ? 'Deselect All' : 'Select All'}
             </span>
-            <span className="text-xs text-telegram-subtext/70 ml-1">
+            <span className="text-[11px] text-telegram-subtext/70 ml-1">
               ({filteredDrives.length + filteredTeams.length + filteredContacts.length} items)
             </span>
           </button>
@@ -231,7 +231,7 @@ export function WorkspaceVisibilityModal({
             <button
               key={drive.id}
               onClick={() => draft.performanceMode && toggleDrive(drive.id)}
-              className={`flex w-full items-center gap-3 rounded-lg px-3 py-3 text-left transition-colors ${
+              className={`flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left transition-colors ${
                 draft.performanceMode ? 'hover:bg-telegram-hover cursor-pointer' : 'cursor-default opacity-70'
               }`}
             >
@@ -264,7 +264,7 @@ export function WorkspaceVisibilityModal({
             <button
               key={team.id}
               onClick={() => draft.performanceMode && toggleTeam(team.id)}
-              className={`flex w-full items-center gap-3 rounded-lg px-3 py-3 text-left transition-colors ${
+              className={`flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left transition-colors ${
                 draft.performanceMode ? 'hover:bg-telegram-hover cursor-pointer' : 'cursor-default opacity-70'
               }`}
             >
@@ -297,7 +297,7 @@ export function WorkspaceVisibilityModal({
             <button
               key={contact.user_id}
               onClick={() => draft.performanceMode && toggleDM(contact.user_id)}
-              className={`flex w-full items-center gap-3 rounded-lg px-3 py-3 text-left transition-colors ${
+              className={`flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left transition-colors ${
                 draft.performanceMode ? 'hover:bg-telegram-hover cursor-pointer' : 'cursor-default opacity-70'
               }`}
             >
@@ -325,24 +325,24 @@ export function WorkspaceVisibilityModal({
       </div>
 
       {/* Fixed Footer */}
-      <div className="flex items-center justify-end gap-3 px-8 py-4 border-t border-telegram-border/60">
+      <div className="flex items-center justify-end gap-3 px-8 py-3 border-t border-telegram-border/60">
         <button
           onClick={onClose}
-          className="rounded-lg px-5 py-2.5 text-sm font-medium text-telegram-subtext hover:bg-telegram-hover hover:text-telegram-text transition-colors"
+          className="rounded-lg px-4 py-2 text-sm font-medium text-telegram-subtext hover:bg-telegram-hover hover:text-telegram-text transition-colors"
         >
           Cancel
         </button>
         {mode === 'setup' && (
           <button
             onClick={handleSkip}
-            className="rounded-lg px-5 py-2.5 text-sm font-medium text-telegram-subtext hover:bg-telegram-hover hover:text-telegram-text transition-colors"
+            className="rounded-lg px-4 py-2 text-sm font-medium text-telegram-subtext hover:bg-telegram-hover hover:text-telegram-text transition-colors"
           >
             Skip (show everything)
           </button>
         )}
         <button
           onClick={handleSave}
-          className="rounded-lg bg-telegram-primary px-6 py-2.5 text-sm font-semibold text-white hover:bg-telegram-primary/90 shadow-sm transition-colors"
+          className="rounded-lg bg-telegram-primary px-5 py-2 text-sm font-semibold text-white hover:bg-telegram-primary/90 shadow-sm transition-colors"
         >
           {mode === 'setup' ? 'Save & Continue' : 'Save'}
         </button>
@@ -359,8 +359,8 @@ export function WorkspaceVisibilityModal({
       <div
         className="flex flex-col w-full bg-telegram-surface shadow-2xl overflow-hidden"
         style={{
-          maxWidth: '900px',
-          maxHeight: '80vh',
+          maxWidth: '640px',
+          maxHeight: '85vh',
           borderRadius: '20px',
           boxShadow: '0 25px 60px rgba(0,0,0,0.25), 0 8px 20px rgba(0,0,0,0.15)',
         }}
