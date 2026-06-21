@@ -1,5 +1,5 @@
 import { useMemo, useState, useRef, useEffect } from 'react';
-import { Check, Search, X } from 'lucide-react';
+import { Check, HardDrive, Search, Users, X } from 'lucide-react';
 import { WorkspacePrefs, saveWorkspacePrefs } from './workspaceVisibility';
 import { TelegramAvatar } from './TelegramAvatar';
 
@@ -223,7 +223,7 @@ export function WorkspaceVisibilityModal({
       {/* Scrollable Content */}
       <div className="flex-1 overflow-y-auto px-8 py-2 space-y-2 custom-scrollbar">
         {filteredDrives.length > 0 && (
-          <SectionHeader label="Drives" count={filteredDrives.length} />
+          <SectionHeader icon={HardDrive} label="Drives" count={filteredDrives.length} />
         )}
         {filteredDrives.map(drive => {
           const checked = !draft.performanceMode || draft.visibleDrives.includes(drive.id);
@@ -255,7 +255,7 @@ export function WorkspaceVisibilityModal({
         {filteredTeams.length > 0 && (
           <>
             <div className="pt-2" />
-            <SectionHeader label="Groups" count={filteredTeams.length} />
+            <SectionHeader icon={Users} label="Groups" count={filteredTeams.length} />
           </>
         )}
         {filteredTeams.map(team => {
@@ -372,12 +372,13 @@ export function WorkspaceVisibilityModal({
   );
 }
 
-function SectionHeader({ label, count }: { label: string; count: number }) {
+function SectionHeader({ icon: Icon, label, count }: { icon?: React.ComponentType<{ className?: string }>; label: string; count: number }) {
   return (
     <div
-      className="sticky top-0 z-10 px-1 py-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-telegram-subtext/70 bg-telegram-surface/95 backdrop-blur-sm"
+      className="sticky top-0 z-10 flex items-center gap-1.5 px-1 py-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-telegram-subtext/70 bg-telegram-surface/95 backdrop-blur-sm"
       style={{ margin: 0 }}
     >
+      {Icon && <Icon className="h-3 w-3" />}
       {label}{' '}
       <span className="font-normal text-telegram-subtext/50 normal-case tracking-normal">
         ({count})
