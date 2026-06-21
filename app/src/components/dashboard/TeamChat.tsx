@@ -717,6 +717,7 @@ export function TeamChat({
         try {
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
             const recorder = new MediaRecorder(stream);
+            const voiceStartedAt = Date.now();
             recordingChunksRef.current = [];
             recorderRef.current = recorder;
 
@@ -730,6 +731,7 @@ export function TeamChat({
                     setRecordingStartedAt(null);
                     setRecordingSeconds(0);
                     stream.getTracks().forEach(track => track.stop());
+                    const voiceDuration = Math.max(1, Math.floor((Date.now() - voiceStartedAt) / 1000));
 
                     const blob = new Blob(recordingChunksRef.current, { type: recorder.mimeType || 'audio/webm' });
                     const bytes = new Uint8Array(await blob.arrayBuffer());
@@ -737,11 +739,10 @@ export function TeamChat({
                     const filePath = await join(dir, `voice-${Date.now()}.webm`);
                     await writeFile(filePath, bytes);
                     addPendingAttachment(filePath, 'Voice message', undefined, 'voice');
-                    await invoke('cmd_upload_file', {
+                    await invoke('cmd_send_voice_message', {
+                        teamId: groupId,
                         path: filePath,
-                        folderId: groupId,
-                        virtualFolderId: null,
-                        transferId: `voice-${groupId ?? 'self'}-${Date.now()}`,
+                        duration: voiceDuration,
                     });
                     toast.success('Voice message sent');
                     loadMessages({ silent: true, forceScroll: true });

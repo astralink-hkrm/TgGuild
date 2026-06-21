@@ -1,8 +1,9 @@
 use crate::commands::utils::{map_error, resolve_peer, resolve_input_peer};
 use crate::TelegramState;
-use grammers_client::types::Peer;
+use grammers_client::types::{Attribute, Peer};
 use grammers_client::InputMessage;
 use grammers_tl_types as tl;
+use std::time::Duration;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tauri::State;
@@ -2626,6 +2627,54 @@ pub async fn cmd_send_team_file(
     let message = grammers_client::InputMessage::new()
         .text(caption.unwrap_or_default())
         .file(uploaded);
+
+    client
+        .send_message(&peer, message)
+        .await
+        .map_err(map_error)?;
+
+    Ok(true)
+}
+
+#[tauri::command]
+pub async fn cmd_send_voice_message(
+    team_id: Option<i64>,
+    path: String,
+    duration: Option<f64>,
+    state: State<'_, TelegramState>,
+) -> Result<bool, String> {
+    let client_opt = state.client.lock().await.clone();
+    if client_opt.is_none() {
+        return Ok(false);
+    }
+    let client = client_opt.unwrap();
+
+    let metadata = tokio::fs::metadata(&path)
+        .await
+        .map_err(|e| e.to_string())?;
+    let mut file = tokio::fs::File::open(&path)
+        .await
+        .map_err(|e| e.to_string())?;
+    let file_name = std::path::Path::new(&path)
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .unwrap_or_else(|| "voice_message.webm".to_string());
+
+    let uploaded = client
+        .upload_stream(&mut file, metadata.len() as usize, file_name)
+        .await
+        .map_err(map_error)?;
+
+    let peer = resolve_peer(&client, team_id, &state.peer_cache).await?;
+    let duration_secs = duration.map(|d| d.max(0.0) as u64).unwrap_or(0);
+
+    let message = InputMessage::new()
+        .text("")
+        .document(uploaded)
+        .attribute(Attribute::Voice {
+            duration: Duration::from_secs(duration_secs),
+            waveform: None,
+        });
 
     client
         .send_message(&peer, message)

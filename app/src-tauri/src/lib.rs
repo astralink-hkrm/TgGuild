@@ -165,6 +165,7 @@ pub fn run() {
             commands::cmd_search_users,
             commands::cmd_send_team_message,
             commands::cmd_send_team_file,
+            commands::cmd_send_voice_message,
             commands::cmd_get_team_messages,
             commands::cmd_download_team_media,
             commands::cmd_pin_team_message,

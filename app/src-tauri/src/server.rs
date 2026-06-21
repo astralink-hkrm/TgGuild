@@ -248,10 +248,19 @@ async fn stream_avatar(
 
 fn mime_type_from_media(media: &Media) -> String {
     match media {
-        Media::Document(d) => d
-            .mime_type()
-            .unwrap_or("application/octet-stream")
-            .to_string(),
+        Media::Document(d) => {
+            let is_voice = d.raw.voice;
+            let name = d.name();
+            let is_voice_name = name.starts_with("voice-") && name.ends_with(".webm");
+
+            if is_voice || is_voice_name {
+                return "audio/webm".to_string();
+            }
+
+            d.mime_type()
+                .unwrap_or("application/octet-stream")
+                .to_string()
+        }
         _ => "application/octet-stream".to_string(),
     }
 }
