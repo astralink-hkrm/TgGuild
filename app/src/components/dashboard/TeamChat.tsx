@@ -1618,26 +1618,20 @@ export function TeamChat({
                         </button>
                     </div>
                 ) : !displayMessages.some(m => m.message_type !== 'system') ? (
-                    isDirect ? (
-                        <div className="h-full flex flex-col items-center justify-center gap-3 text-center px-4">
-                            <TelegramAvatar
-                                user={{
-                                    user_id: groupId ?? 'self',
-                                    first_name: groupName,
-                                    photo_url: groupPhotoUrl,
-                                }}
-                                token={streamToken}
-                                baseUrl={streamBaseUrl}
-                                size="xl"
-                            />
-                            <p className="text-base font-semibold text-telegram-text">{groupName}</p>
-                            <p className="text-sm text-telegram-subtext">Say hello! 👋</p>
-                        </div>
-                    ) : (
-                        <div className="h-full flex items-center justify-center text-sm text-telegram-subtext">
-                            {clearedUpTo[peerKey] ? 'Chat cleared' : 'No messages yet'}
-                        </div>
-                    )
+                    <div className="h-full flex flex-col items-center justify-center gap-3 text-center px-4">
+                        <TelegramAvatar
+                            user={{
+                                user_id: groupId ?? 'self',
+                                first_name: groupName,
+                                photo_url: groupPhotoUrl,
+                            }}
+                            token={streamToken}
+                            baseUrl={streamBaseUrl}
+                            size="xl"
+                        />
+                        <p className="text-base font-semibold text-telegram-text">{groupName}</p>
+                        <p className="text-sm text-telegram-subtext">Say hello! 👋</p>
+                    </div>
                 ) : (
                     <div className="space-y-2">
                         {(loadingOlder || hasOlderMessages) && (
