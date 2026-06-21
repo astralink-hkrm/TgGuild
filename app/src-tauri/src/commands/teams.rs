@@ -190,6 +190,15 @@ pub struct MessagesResponse {
     pub has_more: bool,
 }
 
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub struct TextEntity {
+    pub offset: i32,
+    pub length: i32,
+    #[serde(rename = "type")]
+    pub entity_type: String,
+    pub user_id: Option<i64>,
+}
+
 #[derive(Clone, serde::Serialize)]
 pub struct ChatMessage {
     pub id: i32,
@@ -209,6 +218,7 @@ pub struct ChatMessage {
     pub audio_duration: Option<f64>,
     pub message_type: String,
     pub action_params: Option<String>,
+    pub entities: Vec<TextEntity>,
 }
 
 fn user_has_photo(user: &tl::enums::User) -> bool {
@@ -2530,6 +2540,29 @@ pub async fn cmd_get_team_messages(
             }
         }
 
+        let msg_entities: Vec<TextEntity> = msg.fmt_entities().map(|ents| {
+            ents.iter().filter_map(|e| {
+                match e {
+                    tl::enums::MessageEntity::Mention(e) => {
+                        Some(TextEntity { offset: e.offset, length: e.length, entity_type: "mention".to_string(), user_id: None })
+                    }
+                    tl::enums::MessageEntity::MentionName(e) => {
+                        Some(TextEntity { offset: e.offset, length: e.length, entity_type: "text_mention".to_string(), user_id: Some(e.user_id) })
+                    }
+                    tl::enums::MessageEntity::Bold(e) => {
+                        Some(TextEntity { offset: e.offset, length: e.length, entity_type: "bold".to_string(), user_id: None })
+                    }
+                    tl::enums::MessageEntity::Italic(e) => {
+                        Some(TextEntity { offset: e.offset, length: e.length, entity_type: "italic".to_string(), user_id: None })
+                    }
+                    tl::enums::MessageEntity::Code(e) => {
+                        Some(TextEntity { offset: e.offset, length: e.length, entity_type: "code".to_string(), user_id: None })
+                    }
+                    _ => None,
+                }
+            }).collect()
+        }).unwrap_or_default();
+
         messages.push(ChatMessage {
             id: msg.id(),
             sender_id,
@@ -2548,6 +2581,7 @@ pub async fn cmd_get_team_messages(
             audio_duration,
             message_type,
             action_params,
+            entities: msg_entities,
         });
     }
 
@@ -2575,6 +2609,7 @@ pub async fn cmd_send_team_message(
     team_id: Option<i64>,
     message: String,
     reply_to_message_id: Option<i32>,
+    entities: Option<Vec<TextEntity>>,
     state: State<'_, TelegramState>,
 ) -> Result<bool, String> {
     let client_opt = state.client.lock().await.clone();
@@ -2585,6 +2620,22 @@ pub async fn cmd_send_team_message(
 
     let peer = resolve_peer(&client, team_id, &state.peer_cache).await?;
     let mut message_obj = grammers_client::InputMessage::new().text(message);
+
+    if let Some(ents) = entities {
+        let entity_list: Vec<tl::enums::MessageEntity> = ents.into_iter().filter_map(|e| {
+            match e.entity_type.as_str() {
+                "mention" => Some(tl::enums::MessageEntity::Mention(tl::types::MessageEntityMention {
+                    offset: e.offset,
+                    length: e.length,
+                })),
+                _ => None,
+            }
+        }).collect();
+        if !entity_list.is_empty() {
+            message_obj = message_obj.fmt_entities(entity_list);
+        }
+    }
+
     message_obj = message_obj.reply_to(reply_to_message_id);
 
     client

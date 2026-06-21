@@ -61,6 +61,13 @@ import { SelectionBar, SelectionDeleteConfirm } from './SelectionBar';
 import { useRealtime } from '../../hooks/useRealtime';
 import { formatTime, formatDateSeparator, formatDisplayDate, dateKey } from '../../utils';
 
+interface TextEntity {
+    offset: number;
+    length: number;
+    type: string;
+    user_id?: number | null;
+}
+
 interface ChatMessage {
     id: number;
     sender_id: number;
@@ -80,6 +87,7 @@ interface ChatMessage {
     audio_duration?: number | null;
     message_type?: string;
     action_params?: string | null;
+    entities?: TextEntity[];
 }
 
 interface MessagesResponse {
@@ -485,6 +493,27 @@ export function TeamChat({
         loadOlderMessages();
     };
 
+    const buildMentionEntities = (text: string): TextEntity[] => {
+        const entities: TextEntity[] = [];
+        const mentionRegex = /@(\w+)/g;
+        let match: RegExpExecArray | null;
+        while ((match = mentionRegex.exec(text)) !== null) {
+            const username = match[1].toLowerCase();
+            const isKnown = mentionableMembers.some(m => {
+                const label = m.username ? `@${m.username}` : `@${m.first_name.replace(/\s+/g, '')}`;
+                return label.toLowerCase() === `@${username}`;
+            });
+            if (isKnown || username === 'all') {
+                entities.push({
+                    offset: match.index,
+                    length: match[0].length,
+                    type: 'mention',
+                });
+            }
+        }
+        return entities;
+    };
+
     const handleSend = async () => {
         if ((!newMessage.trim() && !editText.trim() && !attachmentDraft) || sending || uploading) return;
         try {
@@ -502,10 +531,12 @@ export function TeamChat({
                 await handleSendEdit();
                 return;
             } else {
+                const mentionEntities = buildMentionEntities(newMessage);
                 await invoke('cmd_send_team_message', {
                     teamId: groupId,
                     message: newMessage,
                     replyToMessageId: replyTo?.id ?? null,
+                    entities: mentionEntities.length > 0 ? mentionEntities : null,
                 });
             }
             setNewMessage('');
@@ -1197,7 +1228,30 @@ export function TeamChat({
         return parts.length > 0 ? parts : text;
     };
 
-    const renderMessageContent = (text: string): React.ReactNode => {
+    const renderMessageContent = (text: string, entities?: TextEntity[]): React.ReactNode => {
+        if (entities && entities.length > 0) {
+            const sorted = [...entities].sort((a, b) => a.offset - b.offset);
+            const parts: React.ReactNode[] = [];
+            let pos = 0;
+            for (const e of sorted) {
+                if (e.offset > pos) {
+                    parts.push(linkifyText(text.slice(pos, e.offset)));
+                }
+                const seg = text.slice(e.offset, e.offset + e.length);
+                if (e.type === 'mention') {
+                    parts.push(
+                        <span key={e.offset} className="text-blue-400 font-medium">{seg}</span>
+                    );
+                } else {
+                    parts.push(linkifyText(seg));
+                }
+                pos = e.offset + e.length;
+            }
+            if (pos < text.length) {
+                parts.push(linkifyText(text.slice(pos)));
+            }
+            return parts.length > 0 ? parts : text;
+        }
         if (searchOpen && searchQuery?.trim()) {
             const highlighted = highlightText(text, searchQuery);
             return (Array.isArray(highlighted) ? highlighted : [highlighted]).map((part) =>
@@ -1722,7 +1776,7 @@ export function TeamChat({
                                                 )}
                                                 {msg.text && !(/^\[(Image|Video|Audio|Voice)\]$/.test(msg.text)) && (
                                                     <p className="whitespace-pre-wrap break-words text-sm leading-relaxed">
-                                                        {renderMessageContent(msg.text)}
+                                                        {renderMessageContent(msg.text, msg.entities)}
                                                     </p>
                                                 )}
                                                 <div className={`mt-1 flex items-center justify-end gap-1.5 text-[10px] ${outgoing ? 'text-telegram-primary/60' : 'text-telegram-subtext'}`}>
