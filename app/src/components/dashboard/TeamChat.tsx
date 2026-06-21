@@ -1828,7 +1828,7 @@ export function TeamChat({
                         </button>
                     </div>
                 )}
-                {mentionOptions.length > 0 && (
+                {!isDirect && mentionOptions.length > 0 && (
                     <div className="absolute bottom-[74px] left-14 w-72 overflow-hidden rounded-xl border border-telegram-border bg-telegram-surface shadow-2xl z-50 transition-colors">
                         {mentionOptions.map(option => (
                             <button
@@ -1931,9 +1931,11 @@ export function TeamChat({
                         >
                             <Paperclip className={`w-5 h-5 ${uploading ? 'animate-pulse' : ''}`} />
                         </button>
+                        {!isDirect && (
                         <button onClick={handleMention} className="p-2 text-telegram-subtext hover:text-telegram-text rounded-full transition-colors" title="Mention">
                             <AtSign className="w-5 h-5" />
                         </button>
+                        )}
                         <input
                             ref={inputRef}
                             type="text"
