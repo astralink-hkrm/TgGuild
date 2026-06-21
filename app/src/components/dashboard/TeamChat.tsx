@@ -160,6 +160,7 @@ export function TeamChat({
     const [attachmentDraft, setAttachmentDraft] = useState<AttachmentDraft | null>(null);
     const [reactionPickerFor, setReactionPickerFor] = useState<number | null>(null);
     const [downloadingId, setDownloadingId] = useState<number | null>(null);
+    const [previewImage, setPreviewImage] = useState<ChatMessage | null>(null);
     const [streamToken, setStreamToken] = useState('');
     const [streamBaseUrl, setStreamBaseUrl] = useState('http://localhost:14201');
     const [showPlusMenu, setShowPlusMenu] = useState(false);
@@ -1649,7 +1650,7 @@ export function TeamChat({
                                                 {msg.has_media && msg.media_type !== 'none' && (
                                                     <div className="mb-2 overflow-hidden rounded-xl">
                                                         {['photo', 'image'].includes(msg.media_type) && mediaStreamUrl(msg) ? (
-                                                            <button onClick={() => handleDownload(msg)} className="block max-w-80 overflow-hidden rounded-xl bg-black/5">
+                                                            <button onClick={() => setPreviewImage(msg)} className="block max-w-80 overflow-hidden rounded-xl bg-black/5">
                                                                 <img src={mediaStreamUrl(msg) || ''} alt="" className="max-h-80 w-full object-cover" />
                                                             </button>
                                                         ) : msg.media_type === 'video' && mediaStreamUrl(msg) ? (
@@ -2191,6 +2192,41 @@ export function TeamChat({
                     </div>
                 </div>
             )}
+            {previewImage && (
+                <div
+                    className="fixed inset-0 z-[300] bg-black/90 flex items-center justify-center p-4 backdrop-blur-md animate-in fade-in duration-200"
+                    onClick={() => setPreviewImage(null)}
+                >
+                    <div className="fixed top-16 right-8 z-[301] flex items-center gap-2">
+                        <button
+                            onClick={() => handleDownload(previewImage)}
+                            disabled={downloadingId === previewImage.id}
+                            className="p-2.5 text-white bg-white/20 hover:bg-white/30 rounded-full transition-all disabled:opacity-50 shadow-lg backdrop-blur-sm"
+                            title="Download"
+                        >
+                            <Download className="w-5 h-5" />
+                        </button>
+                        <button
+                            onClick={() => setPreviewImage(null)}
+                            className="p-2.5 text-white bg-white/20 hover:bg-white/30 rounded-full transition-all shadow-lg backdrop-blur-sm"
+                            title="Close"
+                        >
+                            <X className="w-5 h-5" />
+                        </button>
+                    </div>
+                    <div className="flex flex-col items-center" onClick={e => e.stopPropagation()}>
+                        <img
+                            src={mediaStreamUrl(previewImage) || ''}
+                            alt=""
+                            className="max-h-[85vh] max-w-[90vw] object-contain rounded-lg shadow-2xl"
+                        />
+                        <p className="mt-4 text-sm text-white/50">
+                            {previewImage.media_name || `Image`}
+                        </p>
+                    </div>
+                </div>
+            )}
+
             {showSharedMediaModal && (
                 <SharedMediaModal
                     messages={messages}
