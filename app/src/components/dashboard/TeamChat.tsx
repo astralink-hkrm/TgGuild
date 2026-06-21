@@ -1619,16 +1619,22 @@ export function TeamChat({
                     </div>
                 ) : !displayMessages.some(m => m.message_type !== 'system') ? (
                     <div className="h-full flex flex-col items-center justify-center gap-3 text-center px-4">
-                        <TelegramAvatar
-                            user={{
-                                user_id: groupId ?? 'self',
-                                first_name: groupName,
-                                photo_url: groupPhotoUrl,
-                            }}
-                            token={streamToken}
-                            baseUrl={streamBaseUrl}
-                            size="xl"
-                        />
+                        <div className="w-24 h-24 rounded-full overflow-hidden relative flex-shrink-0">
+                            {streamToken && groupPhotoUrl ? (
+                                <img
+                                    key={`${streamToken}-${groupId}`}
+                                    src={`${streamBaseUrl}/avatar/${groupId}?token=${streamToken}`}
+                                    alt=""
+                                    className="w-full h-full object-cover absolute inset-0 z-10"
+                                    onError={(e) => {
+                                        (e.target as HTMLImageElement).style.display = 'none';
+                                    }}
+                                />
+                            ) : null}
+                            <div className={`absolute inset-0 flex items-center justify-center text-white text-2xl font-semibold ${['bg-[#ff516a]','bg-[#ffa85c]','bg-[#8e85ee]','bg-[#70d05b]','bg-[#64d9f3]','bg-[#3ca5f0]','bg-[#ff6c9a]'][Math.abs(groupId ?? 0) % 7]}`}>
+                                {(groupName || '?').trim().charAt(0).toUpperCase()}
+                            </div>
+                        </div>
                         <p className="text-base font-semibold text-telegram-text">{groupName}</p>
                         <p className="text-sm text-telegram-subtext">Say hello! 👋</p>
                     </div>
