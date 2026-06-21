@@ -1655,7 +1655,8 @@ export function TeamChat({
                                                 onToggleSelect={() => handleToggleSelect(msg.id)}
                                             />
                                             <div
-                                                className={`rounded-[18px] px-3 py-2 shadow-sm transition-colors duration-300 ${
+                                                onDoubleClick={() => !isSystem && handleReaction(msg.id, '❤️')}
+                                                className={`rounded-[18px] px-3 py-2 shadow-sm transition-colors duration-300 select-none ${
                                                     outgoing
                                                         ? 'rounded-br-md bg-telegram-primary/10 text-telegram-text border border-telegram-primary/20'
                                                         : 'rounded-bl-md bg-telegram-surface text-telegram-text border border-telegram-border'
