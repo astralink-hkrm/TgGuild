@@ -151,8 +151,10 @@ function AppContent() {
     <main className="h-screen w-screen text-telegram-text overflow-hidden selection:bg-telegram-primary/30 relative flex flex-col bg-telegram-bg">
       <div
         data-tauri-drag-region
-        className="h-10 shrink-0 flex items-center justify-end border-b border-telegram-border bg-telegram-bg select-none relative z-[10000] transition-colors duration-300"
+        className="h-10 shrink-0 flex items-center border-b border-telegram-border bg-telegram-bg select-none relative z-[10000] transition-colors duration-300 gap-2 px-3"
       >
+        <img src="/logo.png" className="w-6 h-6 rounded-full drop-shadow-lg" alt="TgGuild" draggable={false} />
+        <span className="text-sm font-semibold text-telegram-text tracking-tight">TgGuild</span>
         <div data-tauri-drag-region className="min-w-0 flex-1 h-full" />
         <WindowControls />
       </div>
