@@ -168,12 +168,15 @@ export function Sidebar({
 
             const cached = readTelegramDirectoryCache<GroupInfo, ContactInfo>(user?.user_id || null);
             if (cached) {
+                console.log('[loadInitialDirectory] Cache HIT — groups:', cached.teams.length, 'contacts:', cached.contacts.length);
                 setGroups(cached.teams);
                 setContacts(cached.contacts);
                 setTeamsBeforeDate(null);
                 setContactsBeforeDate(null);
                 setTeamsHasMore(false);
                 setContactsHasMore(false);
+            } else {
+                console.log('[loadInitialDirectory] Cache MISS — no cached data found');
             }
         } catch (e) {
             console.error('Failed to load Telegram directory:', e);
@@ -186,6 +189,7 @@ export function Sidebar({
             setGroups(resp.teams);
             setTeamsBeforeDate(resp.next_before_date);
             setTeamsHasMore(resp.has_more);
+            console.log('[loadGroups] contacts.length:', contacts.length, 'contacts:', contacts);
             saveTelegramDirectoryCache(currentUser?.user_id || null, resp.teams, contacts);
         } catch (e) {
             console.error('Failed to load groups:', e);
@@ -246,12 +250,22 @@ export function Sidebar({
         }
         setCreatingGroup(true);
         try {
-            await invoke('cmd_create_team', { name: newGroupName.trim(), description: newGroupDesc.trim() || null });
+            const newGroup = await invoke<GroupInfo>('cmd_create_team', { name: newGroupName.trim(), description: newGroupDesc.trim() || null });
             toast.success('Group created');
             setShowCreateGroupModal(false);
             setNewGroupName('');
             setNewGroupDesc('');
-            loadGroups();
+            setGroups(prev => {
+                const exists = prev.some(g => g.id === newGroup.id);
+                if (exists) return prev;
+                return [{ ...newGroup, unread_count: 0 }, ...prev];
+            });
+            setActiveGroupId(newGroup.id);
+            const prefs = await loadWorkspacePrefs();
+            if (!prefs.visibleGroups.includes(newGroup.id)) {
+                prefs.visibleGroups = [...prefs.visibleGroups, newGroup.id];
+                await saveWorkspacePrefs(prefs);
+            }
         } catch (e) {
             toast.error(`Failed to create group: ${e}`);
         } finally {

@@ -6,7 +6,7 @@ import { toast } from 'sonner';
 import { useConfirm } from '../context/ConfirmContext';
 import { TelegramFolder } from '../types';
 import { useNetworkStatus } from './useNetworkStatus';
-import { loadWorkspacePrefs, isDriveVisible as isDriveVisibleWs } from '../components/dashboard/workspaceVisibility';
+import { loadWorkspacePrefs, saveWorkspacePrefs, isDriveVisible as isDriveVisibleWs } from '../components/dashboard/workspaceVisibility';
 
 export function useTelegramConnection(onLogoutParent: () => void) {
     const queryClient = useQueryClient();
@@ -38,7 +38,7 @@ export function useTelegramConnection(onLogoutParent: () => void) {
         showToast: boolean,
     ) => {
         const prefs = await loadWorkspacePrefs();
-        const selectiveIds = prefs.performanceMode && prefs.visibleDrives.length > 0
+        const selectiveIds = prefs.performanceMode && prefs.visibleDrives.length > 0 && baseFolders.length > 0
             ? baseFolders.filter(f => isDriveVisibleWs(f.id, prefs)).map(f => f.id)
             : null;
 
@@ -201,6 +201,12 @@ export function useTelegramConnection(onLogoutParent: () => void) {
             setFolders(updated);
             await store.set('folders', updated);
             await store.save();
+            setActiveFolderId(newFolder.id);
+            const prefs = await loadWorkspacePrefs();
+            if (!prefs.visibleDrives.includes(newFolder.id)) {
+                prefs.visibleDrives = [...prefs.visibleDrives, newFolder.id];
+                await saveWorkspacePrefs(prefs);
+            }
             toast.success(`Folder "${name}" created.`);
         } catch (e) {
             toast.error("Failed to create folder: " + e);

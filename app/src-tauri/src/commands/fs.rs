@@ -158,9 +158,9 @@ async fn write_tree(
             match client
                 .invoke(&tl::functions::messages::EditMessage {
                     no_webpage: true,
-                    peer: input_peer,
+                    peer: input_peer.clone(),
                     id: msg.id(),
-                    message: Some(text),
+                    message: Some(text.clone()),
                     media: None,
                     reply_markup: None,
                     entities: None,
@@ -174,7 +174,31 @@ async fn write_tree(
                 Ok(_) => {}
                 Err(e) => {
                     let err_str = e.to_string();
-                    if !err_str.contains("MESSAGE_NOT_MODIFIED") {
+                    if err_str.contains("MESSAGE_NOT_MODIFIED") {
+                        // Tree hasn't changed — fine
+                    } else if err_str.contains("EDIT_MESSAGE_TEMP_RESTRICTED") {
+                        // Edit rate-limited — unpin old and send a fresh tree message
+                        if msg.pinned() {
+                            let _ = client
+                                .invoke(&tl::functions::messages::UpdatePinnedMessage {
+                                    silent: true,
+                                    unpin: true,
+                                    pm_oneside: false,
+                                    peer: input_peer,
+                                    id: msg.id(),
+                                })
+                                .await;
+                        }
+                        let sent = client
+                            .send_message(peer, InputMessage::new().text(text))
+                            .await
+                            .map_err(map_error)?;
+                        client
+                            .pin_message(peer, sent.id())
+                            .await
+                            .map_err(|e| format!("Failed to pin tree: {}", e))?;
+                        return Ok(());
+                    } else {
                         return Err(format!("Failed to update tree: {}", err_str));
                     }
                 }

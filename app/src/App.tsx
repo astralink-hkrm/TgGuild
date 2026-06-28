@@ -100,10 +100,6 @@ function AppContent() {
             const isAuthorized = await invoke<boolean>("cmd_check_connection");
             if (isAuthorized) {
               setIsAuthenticated(true);
-              const prefs = await loadWorkspacePrefs();
-              if (!prefs.firstRunCompleted) {
-                setShowFirstRun(true);
-              }
             }
           }
         }
@@ -115,6 +111,17 @@ function AppContent() {
     };
     checkAuth();
   }, []);
+
+  // Show first-run setup after authentication if not yet completed
+  useEffect(() => {
+    if (isAuthenticated) {
+      loadWorkspacePrefs().then(prefs => {
+        if (!prefs.firstRunCompleted) {
+          setShowFirstRun(true);
+        }
+      });
+    }
+  }, [isAuthenticated]);
 
   // Handle workspace visibility decision for a newly joined group
   const handleVisibilityShow = async () => {

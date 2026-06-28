@@ -140,7 +140,10 @@ export function Dashboard({ onLogout, pendingGroupOpen, onPendingGroupOpenConsum
                 const contactResp = await invoke<{ chats: any[] }>('cmd_get_direct_chats', dmParams);
                 setContacts(contactResp.chats);
                 if (!groupParams.selectiveIds) {
+                    console.log('[Dashboard init] Writing cache — groups:', groupResp.teams.length, 'contacts:', contactResp.chats.length);
                     saveTelegramDirectoryCache(user?.user_id || null, groupResp.teams, contactResp.chats);
+                } else {
+                    console.log('[Dashboard init] NOT writing cache — selectiveIds is set');
                 }
             } catch {
                 if (!groupParams.selectiveIds) {

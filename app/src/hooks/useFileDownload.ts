@@ -503,6 +503,9 @@ export function useFileDownload(store: Store | null) {
             }
 
             if (fileReady) {
+                if (!isMedia) {
+                    toastId = toast.loading(`Opening ${filename}...`, { duration: Infinity });
+                }
             } else {
                 const transferId = `open_${messageId}_${Date.now()}`;
 
@@ -553,7 +556,7 @@ export function useFileDownload(store: Store | null) {
             if (isMedia) {
                 setOpeningProgress(null);
             } else {
-                toast.success(`Opened ${filename}`, { id: toastId });
+                toast.success(`Opened ${filename}`, { id: toastId, duration: 4000 });
             }
         } catch (e) {
             if (isMedia) {

@@ -25,6 +25,8 @@ interface WorkspaceVisibilityModalProps {
   prefs: WorkspacePrefs;
   streamToken?: string;
   mode?: 'setup' | 'settings';
+  loading?: boolean;
+  hasData?: boolean;
   onClose: () => void;
   onSave: (prefs: WorkspacePrefs) => void;
 }
@@ -36,6 +38,8 @@ export function WorkspaceVisibilityModal({
   prefs,
   streamToken,
   mode = 'settings',
+  loading = false,
+  hasData = true,
   onClose,
   onSave,
 }: WorkspaceVisibilityModalProps) {
@@ -132,6 +136,13 @@ export function WorkspaceVisibilityModal({
     }));
   };
 
+  const nothingSelected = draft.performanceMode &&
+    draft.visibleDrives.length === 0 &&
+    draft.visibleGroups.length === 0 &&
+    draft.visibleDMs.length === 0;
+
+  const canSave = !loading && hasData && !nothingSelected;
+
   const handleSave = async () => {
     const saved = { ...draft, firstRunCompleted: true };
     await saveWorkspacePrefs(saved);
@@ -221,7 +232,13 @@ export function WorkspaceVisibilityModal({
       <div className="mx-8 border-t border-telegram-border/60" />
 
       {/* Scrollable Content */}
-      <div className="flex-1 overflow-y-auto px-8 py-2 space-y-2 custom-scrollbar">
+      <div className="flex-1 overflow-y-auto px-8 py-2 space-y-2 custom-scrollbar relative">
+        {loading && (
+          <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 bg-telegram-surface/80 backdrop-blur-[2px]">
+            <div className="h-6 w-6 border-2 border-telegram-primary border-t-transparent rounded-full animate-spin" />
+            <p className="text-xs text-telegram-subtext">Scanning your workspace...</p>
+          </div>
+        )}
         {filteredDrives.length > 0 && (
           <SectionHeader icon={HardDrive} label="Drives" count={filteredDrives.length} />
         )}
@@ -335,14 +352,16 @@ export function WorkspaceVisibilityModal({
         {mode === 'setup' && (
           <button
             onClick={handleSkip}
-            className="rounded-lg px-4 py-2 text-sm font-medium text-telegram-subtext hover:bg-telegram-hover hover:text-telegram-text transition-colors"
+            disabled={loading}
+            className="rounded-lg px-4 py-2 text-sm font-medium text-telegram-subtext hover:bg-telegram-hover hover:text-telegram-text transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             Skip (show everything)
           </button>
         )}
         <button
           onClick={handleSave}
-          className="rounded-lg bg-telegram-primary px-5 py-2 text-sm font-semibold text-white hover:bg-telegram-primary/90 shadow-sm transition-colors"
+          disabled={!canSave}
+          className="rounded-lg bg-telegram-primary px-5 py-2 text-sm font-semibold text-white hover:bg-telegram-primary/90 shadow-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
         >
           {mode === 'setup' ? 'Save & Continue' : 'Save'}
         </button>

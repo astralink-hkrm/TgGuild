@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { Plus, Folder, ChevronDown, ChevronRight, Loader2, HardDrive, LayoutGrid, AlertCircle } from 'lucide-react';
 import { TelegramFolder, FolderTreeNode } from '../../types';
 import { invoke } from '@tauri-apps/api/core';
@@ -19,20 +19,32 @@ export function MoveToFolderModal({ onClose, onSelect, activeVirtualFolderId, ac
     const [loadingDrives, setLoadingDrives] = useState<Set<number | null>>(new Set());
     const [errorDrives, setErrorDrives] = useState<Set<number | null>>(new Set());
     const [selectedDestination, setSelectedDestination] = useState<{ folderId: number | null; virtualFolderId: number | null } | null>(null);
+    const mountedRef = useRef(true);
+    const loadingRef = useRef(new Set<number | null>());
 
-    const loadTree = useCallback(async (driveId: number | null) => {
-        if (folderTrees.has(driveId) || loadingDrives.has(driveId)) return;
+    useEffect(() => {
+        return () => { mountedRef.current = false; };
+    }, []);
+
+    const loadTree = async (driveId: number | null) => {
+        if (loadingRef.current.has(driveId)) return;
+        if (folderTrees.has(driveId)) return;
+        loadingRef.current.add(driveId);
         setLoadingDrives(prev => new Set(prev).add(driveId));
         setErrorDrives(prev => { const next = new Set(prev); next.delete(driveId); return next; });
         try {
             const tree = await invoke<FolderTreeNode[]>('cmd_get_folder_tree', { folderId: driveId });
+            if (!mountedRef.current) return;
             setFolderTrees(prev => new Map(prev).set(driveId, tree));
         } catch {
+            if (!mountedRef.current) return;
             setErrorDrives(prev => new Set(prev).add(driveId));
         } finally {
+            loadingRef.current.delete(driveId);
+            if (!mountedRef.current) return;
             setLoadingDrives(prev => { const next = new Set(prev); next.delete(driveId); return next; });
         }
-    }, [folderTrees, loadingDrives]);
+    };
 
     const toggleDrive = (driveId: number | null) => {
         setExpandedDrives(prev => {
