@@ -65,6 +65,7 @@ pub fn run() {
                 peer_cache: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
                 cancelled_transfers: Arc::new(tokio::sync::RwLock::new(HashSet::new())),
                 typing_store: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+                dialog_cache: Arc::new(tokio::sync::RwLock::new(None)),
             });
             app.manage(bandwidth::BandwidthManager::new(app.handle()));
             app.manage(StreamConfig {
@@ -187,6 +188,7 @@ pub fn run() {
             commands::cmd_google_disconnect,
             commands::cmd_send_reaction,
             commands::cmd_get_message_reactions,
+            commands::cmd_invalidate_dialog_cache,
             commands::cmd_mark_read,
             commands::cmd_get_message_read_status,
             commands::cmd_set_typing,

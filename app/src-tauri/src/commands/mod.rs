@@ -12,6 +12,15 @@ pub struct TypingEntry {
     pub last_updated: i64,
 }
 
+/// Holds pre-classified dialog data from a single `iter_dialogs()` pass.
+/// Populated and read by the three workspace commands so they share one traversal.
+#[derive(Clone, Default)]
+pub struct DialogCache {
+    pub folders: Vec<crate::models::FolderMetadata>,
+    pub teams: Vec<crate::commands::teams::TeamInfo>,
+    pub direct_chats: Vec<crate::commands::teams::DirectChatInfo>,
+}
+
 /// Tracks the lifecycle of the Telegram connection
 ///
 /// IMPORTANT: The `runner_shutdown` field is critical for preventing stack overflow.
@@ -39,6 +48,10 @@ pub struct TelegramState {
     /// In-memory store for typing indicators keyed by peer_key -> user_id -> TypingEntry.
     /// Used for cross-client typing indicator sharing.
     pub typing_store: Arc<tokio::sync::Mutex<HashMap<String, HashMap<String, TypingEntry>>>>,
+    /// Shared, lazily-populated dialog cache. All three workspace commands
+    /// (cmd_scan_folders, cmd_get_teams, cmd_get_direct_chats) populate and read
+    /// from this cache so dialogs are only traversed once per refresh cycle.
+    pub dialog_cache: Arc<tokio::sync::RwLock<Option<DialogCache>>>,
 }
 
 pub mod auth;

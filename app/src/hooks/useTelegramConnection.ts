@@ -196,6 +196,7 @@ export function useTelegramConnection(onLogoutParent: () => void) {
     const handleCreateFolder = async (name: string) => {
         if (!store) return;
         try {
+            invoke('cmd_invalidate_dialog_cache').catch(() => {});
             const newFolder = await invoke<TelegramFolder>('cmd_create_folder', { name });
             const updated = [...folders, newFolder];
             setFolders(updated);
@@ -223,6 +224,7 @@ export function useTelegramConnection(onLogoutParent: () => void) {
         })) return;
 
         try {
+            invoke('cmd_invalidate_dialog_cache').catch(() => {});
             await invoke('cmd_delete_folder', { folderId });
             const updated = folders.filter(f => f.id !== folderId);
             setFolders(updated);

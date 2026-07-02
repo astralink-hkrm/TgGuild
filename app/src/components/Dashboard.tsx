@@ -118,26 +118,43 @@ export function Dashboard({ onLogout, pendingGroupOpen, onPendingGroupOpenConsum
 
     useEffect(() => {
         const init = async () => {
+            const totalT = performance.now();
+            console.log('[Dashboard] init — start');
+
+            const t1 = performance.now();
             const prefs = await loadWorkspacePrefs();
+            console.log('[Dashboard] init — loadWorkspacePrefs took', (performance.now() - t1).toFixed(1) + 'ms', 'performanceMode:', prefs.performanceMode);
             setWorkspacePrefs(prefs);
 
             const groupParams: Record<string, unknown> = {};
             if (prefs.performanceMode && prefs.visibleGroups.length > 0) {
                 groupParams.selectiveIds = prefs.visibleGroups;
+                console.log('[Dashboard] init — using selective IDs for groups:', prefs.visibleGroups.length);
+            } else {
+                console.log('[Dashboard] init — fetching ALL groups');
             }
+
+            const t2 = performance.now();
             const [groupResp, user] = await Promise.all([
                 invoke<{ teams: {id: number, name: string, username: string | null, member_count: number, photo_url?: string | null}[] }>('cmd_get_teams', groupParams),
                 invoke<{ user_id: string } | null>('cmd_get_current_user'),
             ]);
+            console.log('[Dashboard] init — cmd_get_teams took', (performance.now() - t2).toFixed(1) + 'ms', 'returned', groupResp.teams.length, 'groups');
             setCurrentUserId(user?.user_id || null);
             setGroups(groupResp.teams);
 
             const dmParams: Record<string, unknown> = {};
             if (prefs.performanceMode && prefs.visibleDMs.length > 0) {
                 dmParams.selectiveIds = prefs.visibleDMs.map(id => Number(id));
+                console.log('[Dashboard] init — using selective IDs for DMs:', prefs.visibleDMs.length);
+            } else {
+                console.log('[Dashboard] init — fetching ALL direct chats');
             }
+
+            const t3 = performance.now();
             try {
                 const contactResp = await invoke<{ chats: any[] }>('cmd_get_direct_chats', dmParams);
+                console.log('[Dashboard] init — cmd_get_direct_chats took', (performance.now() - t3).toFixed(1) + 'ms', 'returned', contactResp.chats.length, 'chats');
                 setContacts(contactResp.chats);
                 if (!groupParams.selectiveIds) {
                     console.log('[Dashboard init] Writing cache — groups:', groupResp.teams.length, 'contacts:', contactResp.chats.length);
@@ -145,11 +162,14 @@ export function Dashboard({ onLogout, pendingGroupOpen, onPendingGroupOpenConsum
                 } else {
                     console.log('[Dashboard init] NOT writing cache — selectiveIds is set');
                 }
-            } catch {
+            } catch (e) {
+                console.warn('[Dashboard] init — cmd_get_direct_chats failed:', e);
                 if (!groupParams.selectiveIds) {
                     saveTelegramDirectoryCache(user?.user_id || null, groupResp.teams, []);
                 }
             }
+
+            console.log('[Dashboard] init — complete, total time:', (performance.now() - totalT).toFixed(1) + 'ms');
         };
         init();
     }, []);

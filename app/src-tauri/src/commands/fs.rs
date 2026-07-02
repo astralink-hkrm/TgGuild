@@ -6,6 +6,7 @@ use grammers_client::types::{Media, Peer};
 use grammers_client::InputMessage;
 use grammers_tl_types as tl;
 use std::collections::{HashMap, HashSet};
+use std::time::Instant;
 use tauri::{Emitter, State};
 
 use chrono::DateTime;
@@ -86,7 +87,7 @@ struct FolderEntry {
     parent_id: Option<i64>,
 }
 
-fn clean_drive_channel_name(name: &str) -> String {
+pub(crate) fn clean_drive_channel_name(name: &str) -> String {
     let display_name = name
         .replace(" [TD]", "")
         .replace(" [td]", "")
@@ -1762,17 +1763,23 @@ pub async fn cmd_get_files(
     app_handle: tauri::AppHandle,
     state: State<'_, TelegramState>,
 ) -> Result<Vec<FileMetadata>, String> {
+    let fn_start = std::time::Instant::now();
+    log::info!("[cmd_get_files] ENTRY — folder_id: {:?}, virtual_folder_id: {:?}", folder_id, virtual_folder_id);
+
     let client_opt = { state.client.lock().await.clone() };
     if client_opt.is_none() {
-        log::info!("[MOCK] Returning mock files for folder {:?}", folder_id);
-        return Ok(Vec::new()); // No mock files for now
+        log::info!("[cmd_get_files] No client, returning empty in {:?}", fn_start.elapsed());
+        return Ok(Vec::new());
     }
     let client = client_opt.unwrap();
-    let mut files = Vec::new();
 
+    let resolve_start = std::time::Instant::now();
     let peer = resolve_peer(&client, folder_id, &state.peer_cache).await?;
+    let resolve_elapsed = resolve_start.elapsed();
+    log::info!("[cmd_get_files]   resolve_peer: {:?}", resolve_elapsed);
 
     // 1. Get total message count for progress reporting
+    let hist_start = std::time::Instant::now();
     let total_count = match client
         .invoke(&tl::functions::messages::GetHistory {
             peer: resolve_input_peer(&peer)?,
@@ -1791,10 +1798,18 @@ pub async fn cmd_get_files(
         Ok(tl::enums::messages::Messages::ChannelMessages(c)) => c.count as usize,
         _ => 0,
     };
+    let hist_elapsed = hist_start.elapsed();
+    log::info!("[cmd_get_files]   GetHistory (count check) returned total_count={} in {:?}", total_count, hist_elapsed);
+
+    if total_count == 0 {
+        log::info!("[cmd_get_files]   EMPTY FOLDER (0 messages) — should return immediately. Elapsed so far: {:?}", fn_start.elapsed());
+    }
 
     let mut processed = 0;
     let mut last_emit = std::time::Instant::now();
+    let mut files = Vec::new();
 
+    let iter_start = std::time::Instant::now();
     let mut msgs = client.iter_messages(&peer);
     while let Some(msg) = msgs.next().await.map_err(|e| e.to_string())? {
         processed += 1;
@@ -1942,7 +1957,12 @@ pub async fn cmd_get_files(
             });
         }
     }
+    let iter_elapsed = iter_start.elapsed();
+    log::info!("[cmd_get_files]   iter_messages loop: {:?} ({} msgs processed, {} files collected)", iter_elapsed, processed, files.len());
 
+    let total_elapsed = fn_start.elapsed();
+    log::info!("[cmd_get_files] DONE. files={} total_count={} processed={} TOTAL={:?} (resolve:{:?} + history:{:?} + iter:{:?})",
+        files.len(), total_count, processed, total_elapsed, resolve_elapsed, hist_elapsed, iter_elapsed);
     Ok(files)
 }
 
@@ -2300,90 +2320,36 @@ pub async fn cmd_scan_folders(
     state: State<'_, TelegramState>,
     selective_ids: Option<Vec<i64>>,
 ) -> Result<Vec<FolderMetadata>, String> {
-    let client_opt = { state.client.lock().await.clone() };
-    if client_opt.is_none() {
-        return Ok(Vec::new());
-    }
-    let client = client_opt.unwrap();
+    let scan_start = Instant::now();
+    log::info!("[cmd_scan_folders] ENTRY — selective: {}",
+        selective_ids.as_ref().map(|v| v.len().to_string()).unwrap_or_else(|| "none".to_string()));
 
-    let mut folders = Vec::new();
-    let mut dialogs = client.iter_dialogs();
+    // Refresh cache first so the single dialog traversal happens here
+    // (cmd_scan_folders is always called by sync, so it always forces a refresh)
+    let invalidate_t = Instant::now();
+    *state.dialog_cache.write().await = None;
+    log::info!("[cmd_scan_folders]   invalidate cache: {:?}", invalidate_t.elapsed());
 
-    log::info!("Starting Folder Scan...");
+    let cache_t = Instant::now();
+    crate::commands::teams::refresh_dialog_cache(&state).await?;
+    let cache_elapsed = cache_t.elapsed();
+    log::info!("[cmd_scan_folders]   refresh_dialog_cache took: {:?}", cache_elapsed);
 
-    // Acquire write lock once for the entire scan to populate the peer cache
-    let mut peer_cache = state.peer_cache.write().await;
-    let mut seen_channels = HashSet::new();
+    let read_t = Instant::now();
+    let cache = state.dialog_cache.read().await;
+    let cached = cache.as_ref().unwrap();
 
-    let selective_set: Option<HashSet<i64>> = selective_ids.map(|ids| ids.into_iter().collect());
-    let mut remaining_selective = selective_set.clone();
+    let folders: Vec<FolderMetadata> = if let Some(ids) = &selective_ids {
+        let set: HashSet<i64> = ids.iter().cloned().collect();
+        cached.folders.iter().filter(|f| set.contains(&f.id)).cloned().collect()
+    } else {
+        cached.folders.clone()
+    };
+    let read_elapsed = read_t.elapsed();
+    log::info!("[cmd_scan_folders]   read/filter from cache took: {:?}", read_elapsed);
 
-    while let Some(dialog) = dialogs.next().await.map_err(|e| e.to_string())? {
-        if let Some(ref mut remaining) = remaining_selective {
-            if remaining.is_empty() {
-                break;
-            }
-        }
-
-        // Populate peer cache for every dialog we encounter (free priming)
-        match &dialog.peer {
-            Peer::Channel(c) => {
-                let id = c.raw.id;
-                peer_cache.insert(id, dialog.peer.clone());
-
-                if let Some(ref selective) = selective_set {
-                    if !selective.contains(&id) {
-                        continue;
-                    }
-                    if let Some(ref mut remaining) = remaining_selective {
-                        remaining.remove(&id);
-                    }
-                }
-
-                if !c.raw.broadcast || !seen_channels.insert(id) {
-                    continue;
-                }
-
-                let name = c.raw.title.clone();
-                log::debug!("[SCAN] Processing drive channel: '{}' (ID: {})", name, id);
-
-                folders.push(FolderMetadata {
-                    id,
-                    name: clean_drive_channel_name(&name),
-                    parent_id: None,
-                    current_id: Some(id),
-                    member_count: c.raw.participants_count.unwrap_or(0),
-                    top_members: Vec::new(),
-                });
-            }
-            Peer::User(u) => {
-                let id = u.raw.id();
-                peer_cache.insert(id, dialog.peer.clone());
-                log::debug!("[SCAN] Cached User Peer: {}", id);
-                if let Some(ref mut remaining) = remaining_selective {
-                    remaining.remove(&id);
-                }
-            }
-            Peer::Group(g) => {
-                let id = g.raw.id();
-                peer_cache.insert(id, dialog.peer.clone());
-                log::debug!("[SCAN] Cached Group Peer: {}", id);
-
-                if let Some(ref selective) = selective_set {
-                    if selective.contains(&id) {
-                        if let Some(ref mut remaining) = remaining_selective {
-                            remaining.remove(&id);
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    log::info!(
-        "Scan complete. Found {} folders. Peer cache size: {}.",
-        folders.len(),
-        peer_cache.len()
-    );
+    let scan_elapsed = scan_start.elapsed();
+    log::info!("[cmd_scan_folders] DONE. folders={} TOTAL={:?} (cache_wait:{:?} + read:{:?})",
+        folders.len(), scan_elapsed, cache_elapsed, read_elapsed);
     Ok(folders)
 }

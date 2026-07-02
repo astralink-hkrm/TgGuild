@@ -144,13 +144,18 @@ export function WorkspaceVisibilityModal({
   const canSave = !loading && hasData && !nothingSelected;
 
   const handleSave = async () => {
+    const t = performance.now();
+    console.log('[VisibilityModal] handleSave — mode:', mode, 'drives:', draft.visibleDrives.length, 'groups:', draft.visibleGroups.length, 'dms:', draft.visibleDMs.length);
     const saved = { ...draft, firstRunCompleted: true };
     await saveWorkspacePrefs(saved);
+    console.log('[VisibilityModal] handleSave — saved in', (performance.now() - t).toFixed(1) + 'ms');
     onSave(saved);
     onClose();
   };
 
   const handleSkip = async () => {
+    const t = performance.now();
+    console.log('[VisibilityModal] handleSkip — marking all visible, mode:', mode);
     const all: WorkspacePrefs = {
       firstRunCompleted: true,
       visibleDrives: drives.map(d => d.id),
@@ -159,6 +164,7 @@ export function WorkspaceVisibilityModal({
       performanceMode: false,
     };
     await saveWorkspacePrefs(all);
+    console.log('[VisibilityModal] handleSkip — saved in', (performance.now() - t).toFixed(1) + 'ms');
     onSave(all);
     onClose();
   };

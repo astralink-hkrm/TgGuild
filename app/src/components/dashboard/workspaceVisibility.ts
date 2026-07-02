@@ -21,7 +21,11 @@ export const defaultPrefs: WorkspacePrefs = {
 let cached: WorkspacePrefs | null = null;
 
 export async function loadWorkspacePrefs(): Promise<WorkspacePrefs> {
-  if (cached) return cached;
+  if (cached) {
+    console.log('[WorkspacePrefs] loadWorkspacePrefs — returning cached copy');
+    return cached;
+  }
+  const t = performance.now();
   try {
     const store = await load(STORE_FILE);
     const raw = await store.get<WorkspacePrefs>("prefs");
@@ -33,19 +37,28 @@ export async function loadWorkspacePrefs(): Promise<WorkspacePrefs> {
         visibleDMs: Array.isArray(raw.visibleDMs) ? raw.visibleDMs.map(String) : [],
         performanceMode: !!raw.performanceMode,
       };
+      console.log('[WorkspacePrefs] loadWorkspacePrefs — loaded from store in', (performance.now() - t).toFixed(1) + 'ms', 'performanceMode:', cached.performanceMode, 'drives:', cached.visibleDrives.length, 'groups:', cached.visibleGroups.length, 'dms:', cached.visibleDMs.length);
       return cached;
     }
-  } catch { /* ignore */ }
+    console.log('[WorkspacePrefs] loadWorkspacePrefs — no prefs in store, returning defaults');
+  } catch (e) {
+    console.warn('[WorkspacePrefs] loadWorkspacePrefs — error:', e);
+  }
   return defaultPrefs;
 }
 
 export async function saveWorkspacePrefs(prefs: WorkspacePrefs): Promise<void> {
+  const t = performance.now();
+  console.log('[WorkspacePrefs] saveWorkspacePrefs — saving', 'performanceMode:', prefs.performanceMode, 'drives:', prefs.visibleDrives.length, 'groups:', prefs.visibleGroups.length, 'dms:', prefs.visibleDMs.length);
   cached = { ...prefs };
   try {
     const store = await load(STORE_FILE);
     await store.set("prefs", prefs);
     await store.save();
-  } catch { /* ignore */ }
+    console.log('[WorkspacePrefs] saveWorkspacePrefs — saved in', (performance.now() - t).toFixed(1) + 'ms');
+  } catch (e) {
+    console.warn('[WorkspacePrefs] saveWorkspacePrefs — error:', e);
+  }
 }
 
 export function isGroupVisible(id: number, prefs: WorkspacePrefs): boolean {

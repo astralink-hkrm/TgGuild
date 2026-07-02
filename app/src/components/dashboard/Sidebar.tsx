@@ -93,6 +93,7 @@ export function Sidebar({
     const [teamsExpanded, setTeamsExpanded] = useState(true);
     const [directExpanded, setDirectExpanded] = useState(true);
     const [showVisibilitySettings, setShowVisibilitySettings] = useState(false);
+    const [visibilityLoading, setVisibilityLoading] = useState(false);
     const [groups, setGroups] = useState<GroupInfo[]>([]);
     const [contacts, setContacts] = useState<ContactInfo[]>([]);
     const [streamToken, setStreamToken] = useState('');
@@ -113,9 +114,14 @@ export function Sidebar({
     const [creatingGroup, setCreatingGroup] = useState(false);
 
     useEffect(() => {
+        console.log('[Sidebar] mount — loading initial directory + workspace prefs');
+        const st = performance.now();
         loadInitialDirectory();
         invoke<string>('cmd_get_stream_token').then(setStreamToken).catch(console.error);
-        loadWorkspacePrefs().then(setWorkspacePrefs);
+        loadWorkspacePrefs().then((prefs) => {
+            console.log('[Sidebar] workspacePrefs loaded in', (performance.now() - st).toFixed(1) + 'ms', prefs);
+            setWorkspacePrefs(prefs);
+        });
     }, []);
 
     // Refresh sidebar when a group is joined elsewhere (e.g. via invite link)
@@ -123,12 +129,15 @@ export function Sidebar({
         const handler = (e: Event) => {
             const detail = (e as CustomEvent<GroupJoinedEventDetail>).detail;
             if (!detail?.groupId) return;
+            console.log('[Sidebar] GROUP_JOINED_EVENT — groupId:', detail.groupId, 'groupName:', detail.groupName);
+            invoke('cmd_invalidate_dialog_cache').catch(() => {});
 
             // Add the group optimistically - no API call needed because
             // ensureGroupVisible already updated the directory cache.
             setGroups(prev => {
                 const exists = prev.some(g => g.id === detail.groupId);
                 if (exists) return prev;
+                console.log('[Sidebar] GROUP_JOINED_EVENT — adding group to state');
                 return [
                     {
                         id: detail.groupId,
@@ -155,6 +164,8 @@ export function Sidebar({
         const handler = (e: Event) => {
             const detail = (e as CustomEvent<GroupLeftEventDetail>).detail;
             if (!detail?.groupId) return;
+            console.log('[Sidebar] GROUP_LEFT_EVENT — groupId:', detail.groupId);
+            invoke('cmd_invalidate_dialog_cache').catch(() => {});
             setGroups(prev => prev.filter(g => g.id !== detail.groupId));
         };
         window.addEventListener(GROUP_LEFT_EVENT, handler);
@@ -162,13 +173,16 @@ export function Sidebar({
     }, []);
 
     const loadInitialDirectory = async () => {
+        const t = performance.now();
+        console.log('[Sidebar] loadInitialDirectory — start');
         try {
             const user = await invoke<CurrentUser | null>('cmd_get_current_user');
+            console.log('[Sidebar] loadInitialDirectory — current user fetched in', (performance.now() - t).toFixed(1) + 'ms', user?.user_id);
             setCurrentUser(user);
 
             const cached = readTelegramDirectoryCache<GroupInfo, ContactInfo>(user?.user_id || null);
             if (cached) {
-                console.log('[loadInitialDirectory] Cache HIT — groups:', cached.teams.length, 'contacts:', cached.contacts.length);
+                console.log('[Sidebar] loadInitialDirectory — CACHE HIT — groups:', cached.teams.length, 'contacts:', cached.contacts.length, 'elapsed:', (performance.now() - t).toFixed(1) + 'ms');
                 setGroups(cached.teams);
                 setContacts(cached.contacts);
                 setTeamsBeforeDate(null);
@@ -176,36 +190,41 @@ export function Sidebar({
                 setTeamsHasMore(false);
                 setContactsHasMore(false);
             } else {
-                console.log('[loadInitialDirectory] Cache MISS — no cached data found');
+                console.log('[Sidebar] loadInitialDirectory — CACHE MISS — no cached data found, elapsed:', (performance.now() - t).toFixed(1) + 'ms');
             }
         } catch (e) {
-            console.error('Failed to load Telegram directory:', e);
+            console.error('[Sidebar] loadInitialDirectory — error:', e);
         }
     };
 
     const loadGroups = async () => {
+        const t = performance.now();
+        console.log('[Sidebar] loadGroups — start');
         try {
             const resp = await invoke<{ teams: GroupInfo[]; next_before_date: number | null; has_more: boolean }>('cmd_get_teams');
+            console.log('[Sidebar] loadGroups — API returned', resp.teams.length, 'groups in', (performance.now() - t).toFixed(1) + 'ms');
             setGroups(resp.teams);
             setTeamsBeforeDate(resp.next_before_date);
             setTeamsHasMore(resp.has_more);
-            console.log('[loadGroups] contacts.length:', contacts.length, 'contacts:', contacts);
             saveTelegramDirectoryCache(currentUser?.user_id || null, resp.teams, contacts);
         } catch (e) {
-            console.error('Failed to load groups:', e);
+            console.error('[Sidebar] loadGroups — error:', e);
         }
     };
 
     const loadMoreGroups = async () => {
         if (!teamsHasMore || teamsLoadingMore) return;
+        const t = performance.now();
+        console.log('[Sidebar] loadMoreGroups — start, beforeDate:', teamsBeforeDate);
         try {
             setTeamsLoadingMore(true);
             const resp = await invoke<{ teams: GroupInfo[]; next_before_date: number | null; has_more: boolean }>('cmd_get_teams', { beforeDate: teamsBeforeDate });
+            console.log('[Sidebar] loadMoreGroups — got', resp.teams.length, 'more groups in', (performance.now() - t).toFixed(1) + 'ms');
             setGroups(prev => [...prev, ...resp.teams]);
             setTeamsBeforeDate(resp.next_before_date);
             setTeamsHasMore(resp.has_more);
         } catch (e) {
-            console.error('Failed to load more groups:', e);
+            console.error('[Sidebar] loadMoreGroups — error:', e);
         } finally {
             setTeamsLoadingMore(false);
         }
@@ -213,14 +232,17 @@ export function Sidebar({
 
     const loadMoreDirectChats = async () => {
         if (!contactsHasMore || contactsLoadingMore) return;
+        const t = performance.now();
+        console.log('[Sidebar] loadMoreDirectChats — start, beforeDate:', contactsBeforeDate);
         try {
             setContactsLoadingMore(true);
             const resp = await invoke<{ chats: ContactInfo[]; next_before_date: number | null; has_more: boolean }>('cmd_get_direct_chats', { beforeDate: contactsBeforeDate });
+            console.log('[Sidebar] loadMoreDirectChats — got', resp.chats.length, 'more chats in', (performance.now() - t).toFixed(1) + 'ms');
             setContacts(prev => [...prev, ...resp.chats]);
             setContactsBeforeDate(resp.next_before_date);
             setContactsHasMore(resp.has_more);
         } catch (e) {
-            console.error('Failed to load more direct chats:', e);
+            console.error('[Sidebar] loadMoreDirectChats — error:', e);
         } finally {
             setContactsLoadingMore(false);
         }
@@ -230,6 +252,7 @@ export function Sidebar({
         if (!newFolderName.trim()) return;
         try {
             await onCreate(newFolderName);
+            loadWorkspacePrefs().then(setWorkspacePrefs);
             setNewFolderName("");
             setShowNewFolderInput(false);
         } catch {
@@ -250,6 +273,7 @@ export function Sidebar({
         }
         setCreatingGroup(true);
         try {
+            invoke('cmd_invalidate_dialog_cache').catch(() => {});
             const newGroup = await invoke<GroupInfo>('cmd_create_team', { name: newGroupName.trim(), description: newGroupDesc.trim() || null });
             toast.success('Group created');
             setShowCreateGroupModal(false);
@@ -284,14 +308,25 @@ export function Sidebar({
     };
 
     const handleOpenVisibilitySettings = async () => {
-        // Ensure full data is loaded before opening modal
-        await Promise.all([
-            loadGroups(),
-            invoke<{ chats: ContactInfo[]; next_before_date: number | null; has_more: boolean }>('cmd_get_direct_chats')
-                .then(resp => setContacts(resp.chats))
-                .catch(console.error),
-        ]);
+        if (showVisibilitySettings) return;
         setShowVisibilitySettings(true);
+        setVisibilityLoading(true);
+        const t = performance.now();
+        console.log('[Sidebar] handleOpenVisibilitySettings — loading data in background after opening modal');
+        try {
+            await Promise.all([
+                loadGroups(),
+                invoke<{ chats: ContactInfo[]; next_before_date: number | null; has_more: boolean }>('cmd_get_direct_chats')
+                    .then(resp => {
+                        console.log('[Sidebar] handleOpenVisibilitySettings — cmd_get_direct_chats returned', resp.chats.length, 'chats');
+                        setContacts(resp.chats);
+                    })
+                    .catch(console.error),
+            ]);
+        } finally {
+            setVisibilityLoading(false);
+        }
+        console.log('[Sidebar] handleOpenVisibilitySettings — all data loaded in', (performance.now() - t).toFixed(1) + 'ms', 'groups:', groups.length, 'contacts:', contacts.length);
     };
 
     useEffect(() => {
@@ -460,6 +495,12 @@ export function Sidebar({
     const visibleContacts = workspacePrefs
         ? contacts.filter(contact => isDMVisible(contact.user_id, workspacePrefs))
         : contacts;
+
+    // Log state changes
+    useEffect(() => {
+        const source = (groups.length > 0 || contacts.length > 0) ? 'API/fresh' : 'cache/empty';
+        console.log('[Sidebar] state update — source:', source, 'groups:', groups.length, 'contacts:', contacts.length, 'drives:', folders.length, 'workspacePrefs:', !!workspacePrefs);
+    }, [groups, contacts, folders, workspacePrefs]);
 
     return (
         <aside className="w-64 bg-telegram-surface border-r border-telegram-border flex flex-col" onClick={e => e.stopPropagation()}>
@@ -857,17 +898,23 @@ export function Sidebar({
                     prefs={workspacePrefs}
                     streamToken={streamToken}
                     mode="settings"
+                    loading={visibilityLoading}
+                    hasData={groups.length > 0 || contacts.length > 0 || folders.length > 0}
                     onClose={() => setShowVisibilitySettings(false)}
                     onSave={async (prefs) => {
+                        const t = performance.now();
+                        console.log('[Sidebar] WorkspaceVisibilityModal onSave — saving prefs then reloading');
                         setWorkspacePrefs(prefs);
                         saveWorkspacePrefs(prefs);
                         setShowVisibilitySettings(false);
+                        console.log('[Sidebar] onSave — reloading groups after save');
                         loadGroups();
                         try {
                             const resp = await invoke<{ chats: ContactInfo[]; next_before_date: number | null; has_more: boolean }>('cmd_get_direct_chats');
+                            console.log('[Sidebar] onSave — reloaded', resp.chats.length, 'chats in', (performance.now() - t).toFixed(1) + 'ms');
                             setContacts(resp.chats);
                         } catch (e) {
-                            console.error('Failed to reload contacts:', e);
+                            console.error('[Sidebar] onSave — failed to reload contacts:', e);
                         }
                     }}
                 />

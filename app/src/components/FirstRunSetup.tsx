@@ -50,20 +50,28 @@ export function FirstRunSetup({ onComplete }: FirstRunSetupProps) {
 
     useEffect(() => {
         const scan = async () => {
+            const t = performance.now();
+            console.log('[FirstRunSetup] scan — starting', { selectiveIds: null });
             try {
+                const t1 = performance.now();
                 const [driveResp, groupResp, contactResp] = await Promise.all([
                     invoke<DriveItem[]>('cmd_scan_folders', { selectiveIds: null }),
                     invoke<{ teams: TeamItem[] }>('cmd_get_teams'),
                     invoke<{ chats: ContactItem[] }>('cmd_get_direct_chats'),
                 ]);
+                const elapsed = performance.now() - t1;
                 if (!mounted.current) return;
+                console.log('[FirstRunSetup] scan — all commands completed in', elapsed.toFixed(1) + 'ms', 'drives:', driveResp.length, 'groups:', groupResp.teams.length, 'chats:', contactResp.chats.length);
                 setDrives(driveResp);
                 setTeams(groupResp.teams);
                 setContacts(contactResp.chats);
-            } catch {
-                // Data will remain empty
+            } catch (e) {
+                console.error('[FirstRunSetup] scan — error:', e);
             } finally {
-                if (mounted.current) setIsScanning(false);
+                if (mounted.current) {
+                    console.log('[FirstRunSetup] scan — total time:', (performance.now() - t).toFixed(1) + 'ms');
+                    setIsScanning(false);
+                }
             }
         };
         scan();

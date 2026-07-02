@@ -1,9 +1,12 @@
 use crate::commands::utils::{map_error, resolve_peer, resolve_input_peer};
+use crate::models::FolderMetadata;
+use crate::commands::fs::clean_drive_channel_name;
+use crate::commands::DialogCache;
 use crate::TelegramState;
 use grammers_client::types::{Attribute, Peer};
 use grammers_client::InputMessage;
 use grammers_tl_types as tl;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tauri::State;
@@ -401,112 +404,78 @@ pub async fn cmd_get_current_user(
     }))
 }
 
-#[tauri::command]
-pub async fn cmd_get_teams(
-    state: State<'_, TelegramState>,
-    _before_date: Option<i64>,
-    selective_ids: Option<Vec<i64>>,
-) -> Result<TeamsResponse, String> {
-    let client_opt = state.client.lock().await.clone();
-    if client_opt.is_none() {
-        return Ok(TeamsResponse {
-            teams: Vec::new(),
-            next_before_date: None,
-            has_more: false,
-        });
-    }
-    let client = client_opt.unwrap();
-    let mut teams = Vec::new();
-
-    if let Some(ids) = &selective_ids {
-        log::info!("Fetching {} selected Telegram groups", ids.len());
-        // Use a more efficient way if we have specific IDs
-        // For now, we still iterate dialogs but stop when we found them all
-        // to stay within the high-level API safely.
-        let mut dialogs = client.iter_dialogs();
-        let mut remaining_ids: HashSet<i64> = ids.iter().cloned().collect();
-
-        while let Some(dialog) = dialogs.next().await.map_err(|e| e.to_string())? {
-            if remaining_ids.is_empty() {
-                break;
-            }
-
-            let id = match &dialog.peer {
-                Peer::Channel(c) => c.raw.id,
-                Peer::Group(g) => g.raw.id(),
-                _ => continue,
-            };
-
-            if remaining_ids.remove(&id) {
-                match &dialog.peer {
-                    Peer::Channel(c) => {
-                        state.peer_cache.write().await.insert(id, dialog.peer.clone());
-                        teams.push(TeamInfo {
-                            id,
-                            name: c.raw.title.clone(),
-                            username: c.raw.username.clone(),
-                            member_count: c.raw.participants_count.unwrap_or(0),
-                            is_channel: false,
-                            is_supergroup: c.raw.megagroup,
-                            top_members: Vec::new(),
-                            unread_count: get_dialog_unread_count(&dialog.raw),
-                            photo_url: if chat_has_photo(&tl::enums::Chat::Channel(c.raw.clone())) {
-                                Some("present".to_string())
-                            } else {
-                                None
-                            },
-                        });
-                    }
-                    Peer::Group(g) => {
-                        let (title, username, member_count, is_supergroup) = match &g.raw {
-                            tl::enums::Chat::Chat(c) => (c.title.clone(), None, c.participants_count, false),
-                            tl::enums::Chat::Channel(c) => (c.title.clone(), c.username.clone(), c.participants_count.unwrap_or(0), c.megagroup),
-                            _ => ("Unknown Group".to_string(), None, 0, false),
-                        };
-                        state.peer_cache.write().await.insert(id, dialog.peer.clone());
-                        teams.push(TeamInfo {
-                            id,
-                            name: title,
-                            username,
-                            member_count,
-                            is_channel: false,
-                            is_supergroup,
-                            top_members: Vec::new(),
-                            unread_count: get_dialog_unread_count(&dialog.raw),
-                            photo_url: if chat_has_photo(&g.raw) {
-                                Some("present".to_string())
-                            } else {
-                                None
-                            },
-                        });
-                    }
-                    _ => {}
-                }
-            }
+/// Single pass through all Telegram dialogs: classifies every dialog into
+/// folders (broadcast channels), teams (non-broadcast channels + groups),
+/// and direct chats (users). Populates peer_cache along the way.
+/// Stores the result in `state.dialog_cache` so that cmd_scan_folders,
+/// cmd_get_teams, and cmd_get_direct_chats share one traversal.
+pub async fn refresh_dialog_cache(state: &TelegramState) -> Result<(), String> {
+    // Short-circuit if already cached
+    {
+        let guard = state.dialog_cache.read().await;
+        if guard.is_some() {
+            drop(guard);
+            return Ok(());
         }
-    } else {
-        log::info!("Fetching all Telegram group dialogs for Teams");
-        let mut dialogs = client.iter_dialogs();
+    }
 
-        while let Some(dialog) = dialogs.next().await.map_err(|e| e.to_string())? {
-            match &dialog.peer {
-                Peer::Channel(c) => {
-                    if c.raw.broadcast {
-                        continue;
-                    }
+    let fn_start = Instant::now();
+
+    let lock_start = Instant::now();
+    let client_opt = { state.client.lock().await.clone() };
+    let client = match client_opt {
+        Some(c) => c,
+        None => {
+            *state.dialog_cache.write().await = Some(DialogCache::default());
+            return Ok(());
+        }
+    };
+    let lock_elapsed = lock_start.elapsed();
+    log::info!("[DIALOG_CACHE]   lock acquire: {:?}", lock_elapsed);
+
+    let mut folders: Vec<FolderMetadata> = Vec::new();
+    let mut teams: Vec<TeamInfo> = Vec::new();
+    let mut direct_by_id: HashMap<i64, DirectChatInfo> = HashMap::new();
+    let mut dialog_order: Vec<i64> = Vec::new();
+
+    let iter_start = Instant::now();
+    let mut dialogs = client.iter_dialogs();
+    let mut peer_cache = state.peer_cache.write().await;
+    let mut seen_channels = HashSet::<i64>::new();
+    let current_user_id = client.get_me().await.map_err(map_error).map(|u| u.raw.id()).unwrap_or(0);
+    let mut dialog_count: u64 = 0;
+
+    while let Some(dialog) = dialogs.next().await.map_err(|e| e.to_string())? {
+        dialog_count += 1;
+        if dialog_count % 100 == 0 {
+            log::info!("[DIALOG_CACHE]   progress: {} dialogs processed so far...", dialog_count);
+        }
+        match &dialog.peer {
+            Peer::Channel(c) => {
+                let id = c.raw.id;
+                peer_cache.insert(id, dialog.peer.clone());
+
+                // Broadcast channels → folders (drives)
+                if c.raw.broadcast && seen_channels.insert(id) {
                     let name = c.raw.title.clone();
-                    let username = c.raw.username.clone();
-                    let id = c.raw.id;
-                    state
-                        .peer_cache
-                        .write()
-                        .await
-                        .insert(id, dialog.peer.clone());
+                    folders.push(FolderMetadata {
+                        id,
+                        name: clean_drive_channel_name(&name),
+                        parent_id: None,
+                        current_id: Some(id),
+                        member_count: c.raw.participants_count.unwrap_or(0),
+                        top_members: Vec::new(),
+                    });
+                    log::debug!("[DIALOG_CACHE] Folder: '{}' (ID: {})", name, id);
+                }
 
+                // Non-broadcast channels → teams
+                if !c.raw.broadcast {
+                    let name = c.raw.title.clone();
                     teams.push(TeamInfo {
                         id,
                         name,
-                        username,
+                        username: c.raw.username.clone(),
                         member_count: c.raw.participants_count.unwrap_or(0),
                         is_channel: false,
                         is_supergroup: c.raw.megagroup,
@@ -519,95 +488,47 @@ pub async fn cmd_get_teams(
                         },
                     });
                 }
-                Peer::Group(g) => {
-                    let (title, username, member_count, is_supergroup) = match &g.raw {
-                        grammers_tl_types::enums::Chat::Chat(c) => (c.title.clone(), None, c.participants_count, false),
-                        grammers_tl_types::enums::Chat::Channel(c) => (c.title.clone(), c.username.clone(), c.participants_count.unwrap_or(0), c.megagroup),
-                        _ => ("Unknown Group".to_string(), None, 0, false),
-                    };
-                    let id = g.raw.id();
-                    state
-                        .peer_cache
-                        .write()
-                        .await
-                        .insert(id, dialog.peer.clone());
-
-                    teams.push(TeamInfo {
-                        id,
-                        name: title,
-                        username,
-                        member_count,
-                        is_channel: false,
-                        is_supergroup,
-                        top_members: Vec::new(),
-                        unread_count: get_dialog_unread_count(&dialog.raw),
-                        photo_url: if chat_has_photo(&g.raw) {
-                            Some("present".to_string())
-                        } else {
-                            None
-                        },
-                    });
-                }
-                _ => {}
             }
-        }
-    }
+            Peer::Group(g) => {
+                let id = g.raw.id();
+                peer_cache.insert(id, dialog.peer.clone());
 
-    log::info!("Found {} Telegram groups", teams.len());
-    Ok(TeamsResponse {
-        teams,
-        next_before_date: None,
-        has_more: false,
-    })
-}
+                let (title, username, member_count, is_supergroup) = match &g.raw {
+                    tl::enums::Chat::Chat(c) => (c.title.clone(), None, c.participants_count, false),
+                    tl::enums::Chat::Channel(c) => (c.title.clone(), c.username.clone(), c.participants_count.unwrap_or(0), c.megagroup),
+                    _ => ("Unknown Group".to_string(), None, 0, false),
+                };
 
-#[tauri::command]
-pub async fn cmd_get_direct_chats(
-    state: State<'_, TelegramState>,
-    _before_date: Option<i64>,
-    selective_ids: Option<Vec<i64>>,
-) -> Result<DirectChatsResponse, String> {
-    let client_opt = state.client.lock().await.clone();
-    if client_opt.is_none() {
-        return Ok(DirectChatsResponse {
-            chats: Vec::new(),
-            next_before_date: None,
-            has_more: false,
-        });
-    }
-    let client = client_opt.unwrap();
-    let current_user_id = client.get_me().await.map_err(map_error)?.raw.id();
-    let mut direct_by_id: HashMap<i64, DirectChatInfo> = HashMap::new();
-    let mut dialog_order: Vec<i64> = Vec::new();
-
-    if let Some(ids) = &selective_ids {
-        log::info!("Fetching {} selected direct Telegram dialogs", ids.len());
-        let mut dialogs = client.iter_dialogs();
-        let mut remaining_ids: HashSet<i64> = ids.iter().cloned().collect();
-
-        while let Some(dialog) = dialogs.next().await.map_err(|e| e.to_string())? {
-            if remaining_ids.is_empty() {
-                break;
+                teams.push(TeamInfo {
+                    id,
+                    name: title,
+                    username,
+                    member_count,
+                    is_channel: false,
+                    is_supergroup,
+                    top_members: Vec::new(),
+                    unread_count: get_dialog_unread_count(&dialog.raw),
+                    photo_url: if chat_has_photo(&g.raw) {
+                        Some("present".to_string())
+                    } else {
+                        None
+                    },
+                });
             }
-
-            if let Peer::User(user) = &dialog.peer {
+            Peer::User(user) => {
                 let user_id = user.raw.id();
-                if remaining_ids.remove(&user_id) {
-                    if user_id == current_user_id {
-                        continue;
-                    }
+                peer_cache.insert(user_id, dialog.peer.clone());
 
-                    let (phone, access_hash) = match &user.raw {
-                        tl::enums::User::User(raw) => (raw.phone.clone(), raw.access_hash),
-                        _ => (None, None),
-                    };
+                if user_id == current_user_id {
+                    continue;
+                }
 
-                    state
-                        .peer_cache
-                        .write()
-                        .await
-                        .insert(user_id, dialog.peer.clone());
+                let (phone, access_hash) = match &user.raw {
+                    tl::enums::User::User(raw) => (raw.phone.clone(), raw.access_hash),
+                    _ => (None, None),
+                };
 
+                if !direct_by_id.contains_key(&user_id) {
                     direct_by_id.insert(user_id, DirectChatInfo {
                         user_id,
                         first_name: user.first_name().unwrap_or("Unknown").to_string(),
@@ -628,106 +549,65 @@ pub async fn cmd_get_direct_chats(
                 }
             }
         }
-    } else {
-        log::info!("Fetching all direct Telegram dialogs and contacts");
-        let mut dialogs = client.iter_dialogs();
-
-        while let Some(dialog) = dialogs.next().await.map_err(|e| e.to_string())? {
-            if let Peer::User(user) = &dialog.peer {
-                let user_id = user.raw.id();
-                if user_id == current_user_id {
-                    continue;
-                }
-
-                let (phone, access_hash) = match &user.raw {
-                    tl::enums::User::User(raw) => (raw.phone.clone(), raw.access_hash),
-                    _ => (None, None),
-                };
-
-                state
-                    .peer_cache
-                    .write()
-                    .await
-                    .insert(user_id, dialog.peer.clone());
-
-                direct_by_id.insert(user_id, DirectChatInfo {
-                    user_id,
-                    first_name: user.first_name().unwrap_or("Unknown").to_string(),
-                    last_name: user.last_name().map(|s| s.to_string()),
-                    username: user.username().map(|s| s.to_string()),
-                    phone,
-                    photo_url: if user_has_photo(&user.raw) { Some("present".to_string()) } else { None },
-                    unread_count: get_dialog_unread_count(&dialog.raw),
-                    invite_eligible: user.mutual_contact(),
-                    invite_restriction: if user.mutual_contact() {
-                        None
-                    } else {
-                        Some("Telegram only allows direct invites for mutual contacts. Share an invite link with this person instead.".to_string())
-                    },
-                    access_hash,
-                });
-                dialog_order.push(user_id);
-            }
-        }
-
-        let contact_result = client
-            .invoke(&tl::functions::contacts::GetContacts { hash: 0 })
-            .await
-            .map_err(map_error)?;
-
-        match contact_result {
-            tl::enums::contacts::Contacts::Contacts(c) => {
-                log::info!(
-                    "Merging {} Telegram contacts into direct chats",
-                    c.users.len()
-                );
-                for user in c.users {
-                    if let tl::enums::User::User(u) = user {
-                        if u.id == current_user_id {
-                            continue;
-                        }
-
-                        let u_raw = tl::enums::User::User(u.clone());
-                        state.peer_cache.write().await.insert(
-                            u.id,
-                            Peer::User(grammers_client::types::User::from_raw(u_raw.clone())),
-                        );
-
-                        direct_by_id.entry(u.id).or_insert_with(|| DirectChatInfo {
-                            user_id: u.id,
-                            first_name: u.first_name.clone().unwrap_or_else(|| "Unknown".to_string()),
-                            last_name: u.last_name.clone(),
-                            username: u.username.clone(),
-                            phone: u.phone.clone(),
-                            photo_url: if user_has_photo(&u_raw) { Some("present".to_string()) } else { None },
-                            unread_count: 0,
-                            invite_eligible: u.mutual_contact,
-                            invite_restriction: if u.mutual_contact {
-                                None
-                            } else {
-                                Some("Telegram only allows direct invites for mutual contacts. Share an invite link with this person instead.".to_string())
-                            },
-                            access_hash: u.access_hash,
-                        });
-                    }
-                }
-            }
-            tl::enums::contacts::Contacts::NotModified => {
-                log::info!("Telegram contacts not modified while loading direct chats");
-            }
-        }
     }
 
-    let mut ordered = Vec::new();
+    let iter_elapsed = iter_start.elapsed();
+
+    // Also fetch contacts and merge (same as cmd_get_direct_chats does)
+    let contacts_start = Instant::now();
+    let contact_result = client
+        .invoke(&tl::functions::contacts::GetContacts { hash: 0 })
+        .await
+        .map_err(map_error)?;
+    let contacts_elapsed = contacts_start.elapsed();
+
+    match contact_result {
+        tl::enums::contacts::Contacts::Contacts(c) => {
+            for user in c.users {
+                if let tl::enums::User::User(u) = user {
+                    if u.id == current_user_id {
+                        continue;
+                    }
+                    let u_raw = tl::enums::User::User(u.clone());
+                    peer_cache.insert(
+                        u.id,
+                        Peer::User(grammers_client::types::User::from_raw(u_raw.clone())),
+                    );
+                    direct_by_id.entry(u.id).or_insert_with(|| DirectChatInfo {
+                        user_id: u.id,
+                        first_name: u.first_name.clone().unwrap_or_else(|| "Unknown".to_string()),
+                        last_name: u.last_name.clone(),
+                        username: u.username.clone(),
+                        phone: u.phone.clone(),
+                        photo_url: if user_has_photo(&u_raw) { Some("present".to_string()) } else { None },
+                        unread_count: 0,
+                        invite_eligible: u.mutual_contact,
+                        invite_restriction: if u.mutual_contact {
+                            None
+                        } else {
+                            Some("Telegram only allows direct invites for mutual contacts. Share an invite link with this person instead.".to_string())
+                        },
+                        access_hash: u.access_hash,
+                    });
+                }
+            }
+        }
+        tl::enums::contacts::Contacts::NotModified => {}
+    }
+
+    // Build ordered direct chats (dialog order first, then alphabetical contacts)
+    let sort_start = Instant::now();
+    let direct_count_from_dialogs = dialog_order.len();
+    let direct_count_remaining = direct_by_id.len();
+    let mut ordered_direct = Vec::new();
     let mut seen = HashSet::new();
     for user_id in dialog_order {
         if seen.insert(user_id) {
             if let Some(chat) = direct_by_id.remove(&user_id) {
-                ordered.push(chat);
+                ordered_direct.push(chat);
             }
         }
     }
-
     let mut contact_only: Vec<_> = direct_by_id.into_values().collect();
     contact_only.sort_by(|a, b| {
         let a_name = format!(
@@ -735,22 +615,124 @@ pub async fn cmd_get_direct_chats(
             a.first_name,
             a.last_name.clone().unwrap_or_default(),
             a.username.clone().unwrap_or_default()
-        )
-        .to_lowercase();
+        ).to_lowercase();
         let b_name = format!(
             "{} {} {}",
             b.first_name,
             b.last_name.clone().unwrap_or_default(),
             b.username.clone().unwrap_or_default()
-        )
-        .to_lowercase();
+        ).to_lowercase();
         a_name.cmp(&b_name)
     });
-    ordered.extend(contact_only);
+    ordered_direct.extend(contact_only);
+    let sort_elapsed = sort_start.elapsed();
 
-    log::info!("Found {} direct Telegram chats and contacts", ordered.len());
+    let folders_len = folders.len();
+    let teams_len = teams.len();
+    let direct_len = ordered_direct.len();
+    let write_start = Instant::now();
+    *state.dialog_cache.write().await = Some(DialogCache {
+        folders,
+        teams,
+        direct_chats: ordered_direct,
+    });
+    let write_elapsed = write_start.elapsed();
+
+    let total_elapsed = fn_start.elapsed();
+    log::info!("[DIALOG_CACHE] Done.");
+    log::info!("[DIALOG_CACHE]   iter_dialogs: {:?} ({} dialogs, {} folders, {} teams, {} direct_from_dialogs)", iter_elapsed, dialog_count, folders_len, teams_len, direct_count_from_dialogs);
+    log::info!("[DIALOG_CACHE]   contacts.getContacts: {:?} ({} contact_only added)", contacts_elapsed, direct_count_remaining);
+    log::info!("[DIALOG_CACHE]   sort/merge: {:?}", sort_elapsed);
+    log::info!("[DIALOG_CACHE]   cache write: {:?}", write_elapsed);
+    log::info!("[DIALOG_CACHE]   TOTAL: {:?} (peer_cache: {})", total_elapsed, peer_cache.len());
+
+    Ok(())
+}
+
+/// Clear the dialog cache so the next workspace command re-fetches from Telegram.
+#[tauri::command]
+pub async fn cmd_invalidate_dialog_cache(state: State<'_, TelegramState>) -> Result<(), String> {
+    log::info!("[DIALOG_CACHE] Invalidated by frontend");
+    *state.dialog_cache.write().await = None;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn cmd_get_teams(
+    state: State<'_, TelegramState>,
+    _before_date: Option<i64>,
+    selective_ids: Option<Vec<i64>>,
+) -> Result<TeamsResponse, String> {
+    let start = Instant::now();
+    log::info!("[cmd_get_teams] ENTRY — selective_ids: {}",
+        selective_ids.as_ref().map(|v| v.len().to_string()).unwrap_or_else(|| "none".to_string()));
+
+    let cache_t = Instant::now();
+    refresh_dialog_cache(&state).await?;
+    let cache_elapsed = cache_t.elapsed();
+    log::info!("[cmd_get_teams]   refresh_dialog_cache took: {:?}", cache_elapsed);
+
+    let read_t = Instant::now();
+    let cache = state.dialog_cache.read().await;
+    let cached = cache.as_ref().unwrap();
+
+    let teams: Vec<TeamInfo> = if let Some(ids) = &selective_ids {
+        log::info!("[cmd_get_teams]   Filtering {} selected from {} cached", ids.len(), cached.teams.len());
+        let set: HashSet<i64> = ids.iter().cloned().collect();
+        cached.teams.iter().filter(|t| set.contains(&t.id)).cloned().collect()
+    } else {
+        log::info!("[cmd_get_teams]   Returning all {} from cache", cached.teams.len());
+        cached.teams.clone()
+    };
+    let read_elapsed = read_t.elapsed();
+    log::info!("[cmd_get_teams]   read/filter from cache took: {:?}", read_elapsed);
+
+    let elapsed = start.elapsed();
+    log::info!("[cmd_get_teams] DONE. groups={} TOTAL={:?} (cache_wait:{:?} + read:{:?})",
+        teams.len(), elapsed, cache_elapsed, read_elapsed);
+    Ok(TeamsResponse {
+        teams,
+        next_before_date: None,
+        has_more: false,
+    })
+}
+
+#[tauri::command]
+pub async fn cmd_get_direct_chats(
+    state: State<'_, TelegramState>,
+    _before_date: Option<i64>,
+    selective_ids: Option<Vec<i64>>,
+) -> Result<DirectChatsResponse, String> {
+    let start = Instant::now();
+    log::info!("[cmd_get_direct_chats] ENTRY — selective_ids: {}",
+        selective_ids.as_ref().map(|v| v.len().to_string()).unwrap_or_else(|| "none".to_string()));
+
+    // Ensure cache is populated (first call does one full traversal; subsequent reuse it)
+    let cache_t = Instant::now();
+    refresh_dialog_cache(&state).await?;
+    let cache_elapsed = cache_t.elapsed();
+    log::info!("[cmd_get_direct_chats]   refresh_dialog_cache took: {:?}", cache_elapsed);
+
+    let read_t = Instant::now();
+    let cache = state.dialog_cache.read().await;
+    let cached = cache.as_ref().unwrap();
+
+    let chats: Vec<DirectChatInfo> = if let Some(ids) = &selective_ids {
+        log::info!("[cmd_get_direct_chats]   Filtering {} selected from {} cached", ids.len(), cached.direct_chats.len());
+        let set: HashSet<i64> = ids.iter().cloned().collect();
+        cached.direct_chats.iter().filter(|c| set.contains(&c.user_id)).cloned().collect()
+    } else {
+        log::info!("[cmd_get_direct_chats]   Returning all {} from cache", cached.direct_chats.len());
+        cached.direct_chats.clone()
+    };
+    let read_elapsed = read_t.elapsed();
+    log::info!("[cmd_get_direct_chats]   read/filter from cache took: {:?}", read_elapsed);
+
+    let elapsed = start.elapsed();
+    log::info!("[cmd_get_direct_chats] DONE. chats={} TOTAL={:?} (cache_wait:{:?} + read:{:?})",
+        chats.len(), elapsed, cache_elapsed, read_elapsed);
     Ok(DirectChatsResponse {
-        chats: ordered,
+        chats,
         next_before_date: None,
         has_more: false,
     })
