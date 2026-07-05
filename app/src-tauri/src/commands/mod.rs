@@ -56,6 +56,7 @@ pub struct TelegramState {
 
 pub mod auth;
 pub mod fs;
+pub mod password;
 pub mod google;
 pub mod network;
 pub mod preview;
@@ -65,6 +66,7 @@ pub mod utils;
 
 pub use auth::*;
 pub use fs::*;
+pub use password::*;
 pub use google::*;
 pub use network::*;
 pub use preview::*;

@@ -18,6 +18,7 @@ import { useInviteLink } from "./hooks/useInviteLink";
 import { InviteJoinModal } from "./components/dashboard/InviteJoinModal";
 import { NewGroupVisibilityPrompt } from "./components/dashboard/NewGroupVisibilityPrompt";
 import { FirstRunSetup } from "./components/FirstRunSetup";
+import { LockScreen } from "./components/LockScreen";
 
 const queryClient = new QueryClient();
 
@@ -57,6 +58,8 @@ function LoadingScreen() {
 function AppContent() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [isCheckingAuth, setIsCheckingAuth] = useState(true);
+  const [isLocked, setIsLocked] = useState(false);
+  const [isCheckingLock, setIsCheckingLock] = useState(true);
   const [showFirstRun, setShowFirstRun] = useState(false);
   // Set after a successful join — tells Dashboard to open that group
   const [pendingGroupOpen, setPendingGroupOpen] = useState<{ id: number; name: string } | null>(null);
@@ -111,6 +114,23 @@ function AppContent() {
     };
     checkAuth();
   }, []);
+
+  // Check if app lock password is configured
+  useEffect(() => {
+    if (!isAuthenticated || isCheckingAuth) return;
+    const checkLock = async () => {
+      try {
+        const store = await load("settings.json");
+        const hash = await store.get<string>("password_hash");
+        setIsLocked(!!hash);
+      } catch {
+        setIsLocked(false);
+      } finally {
+        setIsCheckingLock(false);
+      }
+    };
+    checkLock();
+  }, [isAuthenticated, isCheckingAuth]);
 
   // Show first-run setup after authentication if not yet completed
   useEffect(() => {
@@ -197,13 +217,17 @@ function AppContent() {
         )}
 
         <AnimatePresence mode="wait">
-          {isCheckingAuth ? (
+          {isCheckingAuth || isCheckingLock ? (
             <motion.div key="loading" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="h-full w-full">
               <LoadingScreen />
             </motion.div>
           ) : showFirstRun ? (
             <motion.div key="firstrun" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="h-full w-full">
               <FirstRunSetup onComplete={() => setShowFirstRun(false)} />
+            </motion.div>
+          ) : isAuthenticated && isLocked ? (
+            <motion.div key="lock" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="h-full w-full">
+              <LockScreen onUnlock={() => setIsLocked(false)} />
             </motion.div>
           ) : isAuthenticated ? (
             <motion.div key="dashboard" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="h-full w-full">

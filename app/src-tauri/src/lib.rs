@@ -208,6 +208,8 @@ pub fn run() {
             commands::cmd_join_group_by_invite,
             commands::cmd_to_tgguild_invite_link,
             commands::cmd_get_tgguild_invite_link,
+            commands::cmd_set_password,
+            commands::cmd_verify_password,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

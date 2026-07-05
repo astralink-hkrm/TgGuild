@@ -1,13 +1,16 @@
 import { useState, useEffect, useRef, ReactNode } from 'react';
-import { Building2, HardDrive, Folder, Plus, RefreshCw, LogOut, Users, ChevronDown, ChevronRight, Settings, File, Film, Image as ImageIcon, Mic, Music, X } from 'lucide-react';
+import { Building2, HardDrive, Folder, Plus, RefreshCw, LogOut, Users, ChevronDown, ChevronRight, Settings, File, Film, Image as ImageIcon, Mic, Music, X, KeyRound, Lock } from 'lucide-react';
 import { toast } from 'sonner';
 import { motion, AnimatePresence } from 'framer-motion';
 import { invoke } from '@tauri-apps/api/core';
+import { load } from '@tauri-apps/plugin-store';
 import { SidebarItem } from './SidebarItem';
 import { BandwidthWidget } from './BandwidthWidget';
 import { MemberStack } from './MemberStack';
 import { TelegramAvatar } from './TelegramAvatar';
 import { WorkspaceVisibilityModal } from './WorkspaceVisibilityModal';
+import { PasswordSetupModal } from '../PasswordSetupModal';
+import { RemovePasswordModal } from '../RemovePasswordModal';
 import {
     loadWorkspacePrefs,
     saveWorkspacePrefs,
@@ -113,6 +116,9 @@ export function Sidebar({
     const [newGroupDesc, setNewGroupDesc] = useState('');
     const [creatingGroup, setCreatingGroup] = useState(false);
     const [showSettingsMenu, setShowSettingsMenu] = useState(false);
+    const [showPasswordSetup, setShowPasswordSetup] = useState(false);
+    const [showRemovePassword, setShowRemovePassword] = useState(false);
+    const [hasPassword, setHasPassword] = useState(false);
     const settingsRef = useRef<HTMLDivElement>(null);
 
     useEffect(() => {
@@ -871,7 +877,19 @@ export function Sidebar({
 
                     <div className="relative ml-auto" ref={settingsRef}>
                         <button
-                            onClick={() => setShowSettingsMenu(!showSettingsMenu)}
+                            onClick={async () => {
+                                const next = !showSettingsMenu;
+                                if (next) {
+                                    try {
+                                        const store = await load('settings.json');
+                                        const hash = await store.get<string>('password_hash');
+                                        setHasPassword(!!hash);
+                                    } catch {
+                                        setHasPassword(false);
+                                    }
+                                }
+                                setShowSettingsMenu(next);
+                            }}
                             className="flex items-center gap-1.5 px-2 py-1 text-xs font-semibold text-telegram-subtext hover:text-telegram-text bg-telegram-surface/50 hover:bg-telegram-surface rounded-lg transition-all"
                         >
                             <Settings className="w-3.5 h-3.5" />
@@ -885,7 +903,7 @@ export function Sidebar({
                                     animate={{ opacity: 1, y: 0, scale: 1 }}
                                     exit={{ opacity: 0, y: -4, scale: 0.95 }}
                                     transition={{ duration: 0.15 }}
-                                    className="absolute bottom-full mb-2 right-0 bg-telegram-surface border border-telegram-border rounded-lg shadow-lg overflow-hidden min-w-[140px]"
+                                    className="absolute bottom-full mb-2 right-0 bg-telegram-surface border border-telegram-border rounded-lg shadow-lg overflow-hidden min-w-[160px]"
                                 >
                                     <button
                                         onClick={() => { onSync(); setShowSettingsMenu(false); }}
@@ -895,6 +913,33 @@ export function Sidebar({
                                         <RefreshCw className={`w-3 h-3 ${isSyncing ? 'animate-spin' : ''}`} />
                                         <span>Sync Now</span>
                                     </button>
+
+                                    <div className="h-px bg-telegram-border/50 mx-2" />
+
+                                    <button
+                                        onClick={() => { setShowPasswordSetup(true); setShowSettingsMenu(false); }}
+                                        className="w-full flex items-center gap-2 px-3 py-2 text-xs font-semibold text-telegram-text hover:bg-telegram-hover transition-all"
+                                    >
+                                        <KeyRound className="w-3 h-3" />
+                                        <span>{hasPassword ? 'Change Password' : 'Set Password'}</span>
+                                    </button>
+
+                                    {hasPassword && (
+                                        <>
+                                            <div className="h-px bg-telegram-border/50 mx-2" />
+
+                                            <button
+                                                onClick={() => { setShowRemovePassword(true); setShowSettingsMenu(false); }}
+                                                className="w-full flex items-center gap-2 px-3 py-2 text-xs font-semibold text-red-400 hover:text-red-300 hover:bg-telegram-hover transition-all"
+                                            >
+                                                <Lock className="w-3 h-3" />
+                                                <span>Remove Password</span>
+                                            </button>
+                                        </>
+                                    )}
+
+                                    <div className="h-px bg-telegram-border/50 mx-2" />
+
                                     <button
                                         onClick={() => { onLogout(); setShowSettingsMenu(false); }}
                                         className="w-full flex items-center gap-2 px-3 py-2 text-xs font-semibold text-red-400 hover:text-red-300 hover:bg-telegram-hover transition-all"
@@ -906,6 +951,27 @@ export function Sidebar({
                             )}
                         </AnimatePresence>
                     </div>
+
+                    {showPasswordSetup && (
+                        <PasswordSetupModal
+                            hasPassword={hasPassword}
+                            onClose={() => setShowPasswordSetup(false)}
+                            onSaved={() => {
+                                setHasPassword(true);
+                                setShowPasswordSetup(false);
+                            }}
+                        />
+                    )}
+
+                    {showRemovePassword && (
+                        <RemovePasswordModal
+                            onClose={() => setShowRemovePassword(false)}
+                            onRemoved={() => {
+                                setHasPassword(false);
+                                setShowRemovePassword(false);
+                            }}
+                        />
+                    )}
                 </div>
 
                 {bandwidth && <BandwidthWidget bandwidth={bandwidth} />}
