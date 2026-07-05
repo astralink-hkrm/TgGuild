@@ -1,5 +1,5 @@
-import { useState, useEffect, ReactNode } from 'react';
-import { Building2, HardDrive, Folder, Plus, RefreshCw, LogOut, Users, LayoutGrid, ChevronDown, ChevronRight, Settings, File, Film, Image as ImageIcon, Mic, Music, X } from 'lucide-react';
+import { useState, useEffect, useRef, ReactNode } from 'react';
+import { Building2, HardDrive, Folder, Plus, RefreshCw, LogOut, Users, ChevronDown, ChevronRight, Settings, File, Film, Image as ImageIcon, Mic, Music, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { motion, AnimatePresence } from 'framer-motion';
 import { invoke } from '@tauri-apps/api/core';
@@ -112,6 +112,18 @@ export function Sidebar({
     const [newGroupName, setNewGroupName] = useState('');
     const [newGroupDesc, setNewGroupDesc] = useState('');
     const [creatingGroup, setCreatingGroup] = useState(false);
+    const [showSettingsMenu, setShowSettingsMenu] = useState(false);
+    const settingsRef = useRef<HTMLDivElement>(null);
+
+    useEffect(() => {
+        const handleClickOutside = (event: MouseEvent) => {
+            if (settingsRef.current && !settingsRef.current.contains(event.target as Node)) {
+                setShowSettingsMenu(false);
+            }
+        };
+        document.addEventListener('mousedown', handleClickOutside);
+        return () => document.removeEventListener('mousedown', handleClickOutside);
+    }, []);
 
     useEffect(() => {
         console.log('[Sidebar] mount — loading initial directory + workspace prefs');
@@ -572,19 +584,6 @@ export function Sidebar({
                                 transition={{ duration: 0.2 }}
                                 className="overflow-hidden space-y-1"
                             >
-                                <SidebarItem
-                                    icon={LayoutGrid}
-                                    label="Saved Messages"
-                                    active={!activeCompanyManagement && activeFolderId === null && activeGroupId === null}
-                                    onClick={() => {
-                                        setActiveCompanyManagement(false);
-                                        setActiveFolderId(null);
-                                        setActiveGroupId(null);
-                                        setActiveDirectChat(null);
-                                    }}
-                                    onDrop={(e: React.DragEvent) => onDrop(e, null)}
-                                    folderId={null}
-                                />
                                 {folders.filter(f => !workspacePrefs || isDriveVisibleWs(f.id, workspacePrefs)).map(folder => (
                                     <SidebarItem
                                         key={folder.id}
@@ -864,27 +863,49 @@ export function Sidebar({
             </nav>
 
             <div className="p-4 border-t border-telegram-border">
-                <div className="flex items-center gap-2 text-telegram-subtext text-[10px] font-medium">
-                    <div className={`w-1.5 h-1.5 rounded-full ${isConnected ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.5)]' : 'bg-red-500'}`}></div>
-                    <span>{isConnected ? 'Connected' : 'Disconnected'}</span>
-                </div>
+                <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 text-telegram-subtext text-[10px] font-medium">
+                        <div className={`w-1.5 h-1.5 rounded-full ${isConnected ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.5)]' : 'bg-red-500'}`}></div>
+                        <span>{isConnected ? 'Connected' : 'Disconnected'}</span>
+                    </div>
 
-                <div className="flex gap-2 mt-4">
-                    <button
-                        onClick={onSync}
-                        disabled={isSyncing}
-                        className={`flex-1 flex items-center justify-center gap-2 px-3 py-2 text-xs font-semibold text-blue-400 hover:text-blue-300 bg-blue-500/10 hover:bg-blue-500/20 rounded-lg transition-all ${isSyncing ? 'opacity-50 cursor-not-allowed' : ''}`}
-                    >
-                        <RefreshCw className={`w-3 h-3 ${isSyncing ? 'animate-spin' : ''}`} />
-                        Sync
-                    </button>
-                    <button
-                        onClick={onLogout}
-                        className="flex-1 flex items-center justify-center gap-2 px-3 py-2 text-xs font-semibold text-red-400 hover:text-red-300 bg-red-500/10 hover:bg-red-500/20 rounded-lg transition-all"
-                    >
-                        <LogOut className="w-3 h-3" />
-                        Exit
-                    </button>
+                    <div className="relative ml-auto" ref={settingsRef}>
+                        <button
+                            onClick={() => setShowSettingsMenu(!showSettingsMenu)}
+                            className="flex items-center gap-1.5 px-2 py-1 text-xs font-semibold text-telegram-subtext hover:text-telegram-text bg-telegram-surface/50 hover:bg-telegram-surface rounded-lg transition-all"
+                        >
+                            <Settings className="w-3.5 h-3.5" />
+                            <span>Settings</span>
+                        </button>
+
+                        <AnimatePresence>
+                            {showSettingsMenu && (
+                                <motion.div
+                                    initial={{ opacity: 0, y: -4, scale: 0.95 }}
+                                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                                    exit={{ opacity: 0, y: -4, scale: 0.95 }}
+                                    transition={{ duration: 0.15 }}
+                                    className="absolute bottom-full mb-2 right-0 bg-telegram-surface border border-telegram-border rounded-lg shadow-lg overflow-hidden min-w-[140px]"
+                                >
+                                    <button
+                                        onClick={() => { onSync(); setShowSettingsMenu(false); }}
+                                        disabled={isSyncing}
+                                        className={`w-full flex items-center gap-2 px-3 py-2 text-xs font-semibold text-telegram-text hover:bg-telegram-hover transition-all ${isSyncing ? 'opacity-50 cursor-not-allowed' : ''}`}
+                                    >
+                                        <RefreshCw className={`w-3 h-3 ${isSyncing ? 'animate-spin' : ''}`} />
+                                        <span>Sync Now</span>
+                                    </button>
+                                    <button
+                                        onClick={() => { onLogout(); setShowSettingsMenu(false); }}
+                                        className="w-full flex items-center gap-2 px-3 py-2 text-xs font-semibold text-red-400 hover:text-red-300 hover:bg-telegram-hover transition-all"
+                                    >
+                                        <LogOut className="w-3 h-3" />
+                                        <span>Sign Out</span>
+                                    </button>
+                                </motion.div>
+                            )}
+                        </AnimatePresence>
+                    </div>
                 </div>
 
                 {bandwidth && <BandwidthWidget bandwidth={bandwidth} />}

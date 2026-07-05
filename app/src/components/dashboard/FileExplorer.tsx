@@ -1,5 +1,5 @@
 import { useState, useMemo, useCallback, useRef, useEffect, type ComponentType } from 'react';
-import { Plus, ArrowUpDown, ArrowUp, ArrowDown, CheckSquare, Download, FolderPlus, MoveRight, Send, Trash2, Upload, XSquare } from 'lucide-react';
+import { ArrowUpDown, ArrowUp, ArrowDown, CheckSquare, Download, FolderPlus, MoveRight, Send, Trash2, Upload, XSquare } from 'lucide-react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { FileCard } from './FileCard';
 import { EmptyState } from './EmptyState';
@@ -112,17 +112,16 @@ export function FileExplorer({
 
 
     const gridRows = useMemo(() => {
-        const rows: (TelegramFile | 'upload')[][] = [];
-        const itemsWithUpload: (TelegramFile | 'upload')[] = [...sortedFiles, 'upload'];
-        for (let i = 0; i < itemsWithUpload.length; i += columns) {
-            rows.push(itemsWithUpload.slice(i, i + columns));
+        const rows: TelegramFile[][] = [];
+        for (let i = 0; i < sortedFiles.length; i += columns) {
+            rows.push(sortedFiles.slice(i, i + columns));
         }
         return rows;
     }, [sortedFiles, columns]);
 
 
     const listItems = useMemo(() => {
-        return activeFolderId === null ? [...sortedFiles, 'upload' as const] : sortedFiles;
+        return sortedFiles;
     }, [sortedFiles, activeFolderId]);
 
 
@@ -283,19 +282,6 @@ export function FileExplorer({
                                     }}
                                 >
                                     {row.map((item) => {
-                                        if (item === 'upload') {
-                                            return (
-                                                <button
-                                                    key="upload"
-                                                    onClick={(e) => { e.stopPropagation(); onManualUpload(); }}
-                                                    className="border-2 border-dashed border-telegram-border rounded-xl flex flex-col items-center justify-center text-telegram-subtext hover:border-telegram-primary hover:text-telegram-primary transition-all group"
-                                                    style={{ height: `${cardHeight}px` }}
-                                                >
-                                                    <Plus className="w-8 h-8 mb-2 group-hover:scale-110 transition-transform" />
-                                                    <span className="text-sm font-medium">Upload File</span>
-                                                </button>
-                                            );
-                                        }
                                         const file = item;
                                         const actualId = file.current_id ?? file.id;
                                         return (
@@ -342,25 +328,7 @@ export function FileExplorer({
                         style={{ height: `${listVirtualizer.getTotalSize()}px` }}
                     >
                         {listVirtualizer.getVirtualItems().map((virtualItem) => {
-                            const item = listItems[virtualItem.index];
-                            if (item === 'upload') {
-                                return (
-                                    <div
-                                        key="upload"
-                                        className="absolute top-0 left-0 w-full"
-                                        style={{ transform: `translateY(${virtualItem.start}px)` }}
-                                    >
-                                        <button
-                                            onClick={(e) => { e.stopPropagation(); onManualUpload(); }}
-                                            className="flex items-center gap-4 px-4 py-3 rounded-lg cursor-pointer border border-dashed border-telegram-border text-telegram-subtext hover:text-telegram-text hover:bg-telegram-hover w-full"
-                                        >
-                                            <div className="w-5 h-5 flex items-center justify-center"><Plus className="w-4 h-4" /></div>
-                                            <span className="text-sm font-medium">Upload File...</span>
-                                        </button>
-                                    </div>
-                                );
-                            }
-                            const file = item;
+                            const file = listItems[virtualItem.index];
                             const actualId = file.current_id ?? file.id;
                             return (
                                 <div

@@ -60,9 +60,7 @@ export function ShareFilesModal({ folders, selectedCount, onClose, onShare }: Sh
     }, []);
 
     const sections = useMemo(() => {
-        const company: Destination[] = [
-            { id: null, type: 'drive', title: 'Saved Messages', subtitle: 'Personal drive' },
-        ];
+        const company: Destination[] = [];
         const drive: Destination[] = folders.map(folder => ({
                 id: folder.id,
                 type: 'drive' as const,

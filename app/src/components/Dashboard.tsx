@@ -321,7 +321,7 @@ export function Dashboard({ onLogout, pendingGroupOpen, onPendingGroupOpenConsum
 
     const currentFolderName = useMemo(() => {
         if (activeVirtualFolderId === null) {
-            if (activeFolderId === null) return "Saved Messages";
+            if (activeFolderId === null) return "Drive";
             const folder = folders.find(f => f.id === activeFolderId);
             return folder ? folder.name : "Drive";
         }
@@ -535,7 +535,7 @@ export function Dashboard({ onLogout, pendingGroupOpen, onPendingGroupOpenConsum
     }
 
     const driveName = activeFolderId === null
-        ? "Saved Messages"
+        ? "Drive"
         : folders.find(f => f.id === activeFolderId)?.name || "Folder";
     const currentDrivePath = [driveName, ...virtualFolderStack.map(folder => folder.name)].join(' / ');
 

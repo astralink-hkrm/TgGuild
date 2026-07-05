@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { Plus, Folder, ChevronDown, ChevronRight, Loader2, HardDrive, LayoutGrid, AlertCircle } from 'lucide-react';
+import { Plus, Folder, ChevronDown, ChevronRight, Loader2, HardDrive, AlertCircle } from 'lucide-react';
 import { TelegramFolder, FolderTreeNode } from '../../types';
 import { invoke } from '@tauri-apps/api/core';
 
@@ -221,12 +221,6 @@ export function MoveToFolderModal({ onClose, onSelect, activeVirtualFolderId, ac
                 </div>
 
                 <div className="flex-1 overflow-y-auto min-h-0">
-                    {renderDriveSection(
-                        null,
-                        'Saved Messages',
-                        <LayoutGrid className="w-4 h-4 text-telegram-subtext" />
-                    )}
-
                     {folders.map(drive => renderDriveSection(
                         drive.id,
                         drive.name,

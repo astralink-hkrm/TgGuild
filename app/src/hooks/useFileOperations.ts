@@ -231,7 +231,7 @@ export function useFileOperations(
                         toast.warning(`Files moved to drive root. Virtual folder placement failed: ${virtualMoveError}`);
                     }
                 } else {
-                    toast.success(`Moved ${selectedIds.length} file(s) to ${targetFolderId === null ? 'Saved Messages' : 'target drive'}.`);
+                    toast.success(`Moved ${selectedIds.length} file(s) to target drive.`);
                 }
 
                 queryClient.invalidateQueries({ queryKey: ['files', targetFolderId, targetVirtualFolderId] });
