@@ -374,25 +374,6 @@ export function TeamChat({
         setShowStarredView(false);
     }, [groupId]);
 
-    // Check star status for messages
-    useEffect(() => {
-        if (!groupId || displayMessages.length === 0) return;
-        const checkStarStatus = async () => {
-            const statuses: Record<string, boolean> = {};
-            const batch = displayMessages.filter(m => !m.pending).slice(-30);
-            for (const msg of batch) {
-                try {
-                    const starred = await invoke<boolean>('cmd_is_message_starred', {
-                        chatId: groupId,
-                        messageId: msg.id,
-                    });
-                    statuses[msg.id] = starred;
-                } catch {}
-            }
-            setStarStatus(prev => ({ ...prev, ...statuses }));
-        };
-        checkStarStatus();
-    }, [groupId, displayMessages.length]);
 
     const isNearBottom = () => {
         const container = messagesContainerRef.current;
@@ -619,9 +600,12 @@ export function TeamChat({
 
     const handleStarToggle = async (msg: ChatMessage) => {
         const key = `${groupId}-${msg.id}`;
-        const currentlyStarred = starStatus[key] || false;
         try {
-            if (currentlyStarred) {
+            const isStarred = await invoke<boolean>('cmd_is_message_starred', {
+                chatId: groupId,
+                messageId: msg.id,
+            });
+            if (isStarred) {
                 await invoke('cmd_unstar_message', { chatId: groupId, messageId: msg.id });
             } else {
                 await invoke('cmd_star_message', {
@@ -633,10 +617,10 @@ export function TeamChat({
                     chatName: groupName,
                 });
             }
-            setStarStatus(prev => ({ ...prev, [key]: !currentlyStarred }));
-            toast.success(currentlyStarred ? 'Removed star' : 'Message starred');
+            setStarStatus(prev => ({ ...prev, [key]: !isStarred }));
+            toast.success(isStarred ? 'Removed star' : 'Message starred');
         } catch (e) {
-            toast.error(`Failed to ${currentlyStarred ? 'unstar' : 'star'} message: ${e}`);
+            toast.error(`Failed to toggle star: ${e}`);
         }
     };
 

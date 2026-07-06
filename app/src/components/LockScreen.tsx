@@ -42,6 +42,7 @@ export function LockScreen({ onUnlock }: LockScreenProps) {
             });
 
             if (valid) {
+                sessionStorage.setItem('tgguild_unlocked', 'true');
                 onUnlock();
             } else {
                 setError('Incorrect password');

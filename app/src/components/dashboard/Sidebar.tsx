@@ -45,7 +45,7 @@ interface ContactInfo {
     unread_count?: number;
 }
 
-interface CurrentUser {
+export interface CurrentUser {
     user_id: string;
     first_name: string;
     last_name?: string | null;
@@ -81,14 +81,15 @@ interface SidebarProps {
     onCreate: (name: string) => Promise<void>;
     isSyncing: boolean;
     isConnected: boolean;
-    onSync: () => void;
+    onRefresh: () => void;
     onLogout: () => void;
     bandwidth: BandwidthStats | null;
+    currentUser: CurrentUser | null;
 }
 
 export function Sidebar({
     folders, activeFolderId, setActiveFolderId, activeGroupId, setActiveGroupId, activeDirectChatId, setActiveDirectChat, activeCompanyManagement, setActiveCompanyManagement, onDrop, onDelete, onRename, onCreate,
-    isSyncing, isConnected, onSync, onLogout, bandwidth
+    isConnected, onRefresh, onLogout, bandwidth, currentUser: currentUserProp
 }: SidebarProps) {
     const [showNewFolderInput, setShowNewFolderInput] = useState(false);
     const [newFolderName, setNewFolderName] = useState("");
@@ -101,7 +102,9 @@ export function Sidebar({
     const [contacts, setContacts] = useState<ContactInfo[]>([]);
     const [streamToken, setStreamToken] = useState('');
     const [workspacePrefs, setWorkspacePrefs] = useState<WorkspacePrefs | null>(null);
-    const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
+    const [fetchedUser, setFetchedUser] = useState<CurrentUser | null>(null);
+
+    const currentUser = currentUserProp ?? fetchedUser;
     const [teamsBeforeDate, setTeamsBeforeDate] = useState<number | null>(null);
     const [contactsBeforeDate, setContactsBeforeDate] = useState<number | null>(null);
     const [teamsHasMore, setTeamsHasMore] = useState(false);
@@ -194,9 +197,11 @@ export function Sidebar({
         const t = performance.now();
         console.log('[Sidebar] loadInitialDirectory — start');
         try {
-            const user = await invoke<CurrentUser | null>('cmd_get_current_user');
-            console.log('[Sidebar] loadInitialDirectory — current user fetched in', (performance.now() - t).toFixed(1) + 'ms', user?.user_id);
-            setCurrentUser(user);
+            const user = currentUserProp ?? await invoke<CurrentUser | null>('cmd_get_current_user');
+            if (!currentUserProp && user) {
+                setFetchedUser(user);
+            }
+            console.log('[Sidebar] loadInitialDirectory — current user:', user?.user_id, 'elapsed:', (performance.now() - t).toFixed(1) + 'ms');
 
             const cached = readTelegramDirectoryCache<GroupInfo, ContactInfo>(user?.user_id || null);
             if (cached) {
@@ -906,12 +911,11 @@ export function Sidebar({
                                     className="absolute bottom-full mb-2 right-0 bg-telegram-surface border border-telegram-border rounded-lg shadow-lg overflow-hidden min-w-[160px]"
                                 >
                                     <button
-                                        onClick={() => { onSync(); setShowSettingsMenu(false); }}
-                                        disabled={isSyncing}
-                                        className={`w-full flex items-center gap-2 px-3 py-2 text-xs font-semibold text-telegram-text hover:bg-telegram-hover transition-all ${isSyncing ? 'opacity-50 cursor-not-allowed' : ''}`}
+                                        onClick={() => { onRefresh(); setShowSettingsMenu(false); }}
+                                        className="w-full flex items-center gap-2 px-3 py-2 text-xs font-semibold text-telegram-text hover:bg-telegram-hover transition-all"
                                     >
-                                        <RefreshCw className={`w-3 h-3 ${isSyncing ? 'animate-spin' : ''}`} />
-                                        <span>Sync Now</span>
+                                        <RefreshCw className="w-3 h-3" />
+                                        <span>Refresh</span>
                                     </button>
 
                                     <div className="h-px bg-telegram-border/50 mx-2" />

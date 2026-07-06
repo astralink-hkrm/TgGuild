@@ -11,7 +11,7 @@ import { formatBytes } from '../utils';
 import { RefreshCw } from 'lucide-react';
 
 // Components
-import { Sidebar } from './dashboard/Sidebar';
+import { Sidebar, CurrentUser } from './dashboard/Sidebar';
 import { TopBar } from './dashboard/TopBar';
 import { FileExplorer } from './dashboard/FileExplorer';
 import { TeamChat } from './dashboard/TeamChat';
@@ -48,12 +48,16 @@ export function Dashboard({ onLogout, pendingGroupOpen, onPendingGroupOpenConsum
 
     const {
         store, folders, activeFolderId, setActiveFolderId, isSyncing, isConnected,
-        handleLogout, handleSyncFolders, handleCreateFolder, handleFolderRename, handleFolderDelete
+        handleLogout, handleCreateFolder, handleFolderRename, handleFolderDelete
     } = useTelegramConnection(onLogout);
 
     const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
     const [selectedIds, setSelectedIds] = useState<number[]>([]);
     const [activeVirtualFolderId, setActiveVirtualFolderId] = useState<number | null>(null);
+
+    const handleRefresh = useCallback(() => {
+        window.location.reload();
+    }, []);
     const [virtualFolderStack, setVirtualFolderStack] = useState<TelegramFile[]>([]);
     const [loadingProgress, setLoadingProgress] = useState<{ percent: number, current_item: string } | null>(null);
 
@@ -114,7 +118,7 @@ export function Dashboard({ onLogout, pendingGroupOpen, onPendingGroupOpenConsum
         }
     };
 
-    const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+    const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
 
     useEffect(() => {
         const init = async () => {
@@ -134,15 +138,6 @@ export function Dashboard({ onLogout, pendingGroupOpen, onPendingGroupOpenConsum
                 console.log('[Dashboard] init — fetching ALL groups');
             }
 
-            const t2 = performance.now();
-            const [groupResp, user] = await Promise.all([
-                invoke<{ teams: {id: number, name: string, username: string | null, member_count: number, photo_url?: string | null}[] }>('cmd_get_teams', groupParams),
-                invoke<{ user_id: string } | null>('cmd_get_current_user'),
-            ]);
-            console.log('[Dashboard] init — cmd_get_teams took', (performance.now() - t2).toFixed(1) + 'ms', 'returned', groupResp.teams.length, 'groups');
-            setCurrentUserId(user?.user_id || null);
-            setGroups(groupResp.teams);
-
             const dmParams: Record<string, unknown> = {};
             if (prefs.performanceMode && prefs.visibleDMs.length > 0) {
                 dmParams.selectiveIds = prefs.visibleDMs.map(id => Number(id));
@@ -151,22 +146,25 @@ export function Dashboard({ onLogout, pendingGroupOpen, onPendingGroupOpenConsum
                 console.log('[Dashboard] init — fetching ALL direct chats');
             }
 
-            const t3 = performance.now();
-            try {
-                const contactResp = await invoke<{ chats: any[] }>('cmd_get_direct_chats', dmParams);
-                console.log('[Dashboard] init — cmd_get_direct_chats took', (performance.now() - t3).toFixed(1) + 'ms', 'returned', contactResp.chats.length, 'chats');
-                setContacts(contactResp.chats);
-                if (!groupParams.selectiveIds) {
-                    console.log('[Dashboard init] Writing cache — groups:', groupResp.teams.length, 'contacts:', contactResp.chats.length);
-                    saveTelegramDirectoryCache(user?.user_id || null, groupResp.teams, contactResp.chats);
-                } else {
-                    console.log('[Dashboard init] NOT writing cache — selectiveIds is set');
-                }
-            } catch (e) {
-                console.warn('[Dashboard] init — cmd_get_direct_chats failed:', e);
-                if (!groupParams.selectiveIds) {
-                    saveTelegramDirectoryCache(user?.user_id || null, groupResp.teams, []);
-                }
+            const t2 = performance.now();
+            const [groupResp, user, contactResp] = await Promise.all([
+                invoke<{ teams: {id: number, name: string, username: string | null, member_count: number, photo_url?: string | null}[] }>('cmd_get_teams', groupParams),
+                invoke<CurrentUser | null>('cmd_get_current_user'),
+                invoke<{ chats: any[] }>('cmd_get_direct_chats', dmParams).catch((e) => {
+                    console.warn('[Dashboard] init — cmd_get_direct_chats failed:', e);
+                    return { chats: [] };
+                }),
+            ]);
+            console.log('[Dashboard] init — cmd_get_teams + cmd_get_direct_chats took', (performance.now() - t2).toFixed(1) + 'ms', 'returned', groupResp.teams.length, 'groups,', contactResp.chats.length, 'chats');
+            setCurrentUser(user);
+            setGroups(groupResp.teams);
+            setContacts(contactResp.chats);
+
+            if (!groupParams.selectiveIds) {
+                console.log('[Dashboard init] Writing cache — groups:', groupResp.teams.length, 'contacts:', contactResp.chats.length);
+                saveTelegramDirectoryCache(user?.user_id || null, groupResp.teams, contactResp.chats);
+            } else {
+                console.log('[Dashboard init] NOT writing cache — selectiveIds is set');
             }
 
             console.log('[Dashboard] init — complete, total time:', (performance.now() - totalT).toFixed(1) + 'ms');
@@ -634,9 +632,10 @@ export function Dashboard({ onLogout, pendingGroupOpen, onPendingGroupOpenConsum
                 onCreate={handleCreateFolder}
                 isSyncing={isSyncing}
                 isConnected={isConnected}
-                onSync={handleSyncFolders}
+                onRefresh={handleRefresh}
                 onLogout={handleLogout}
                 bandwidth={bandwidth || null}
+                currentUser={currentUser}
             />
 
             <main className="flex-1 flex flex-col overflow-hidden" onClick={(e) => { if (e.target === e.currentTarget) setSelectedIds([]); }}>

@@ -117,9 +117,17 @@ function AppContent() {
 
   // Check if app lock password is configured
   useEffect(() => {
-    if (!isAuthenticated || isCheckingAuth) return;
+    if (!isAuthenticated || isCheckingAuth) {
+      setIsCheckingLock(false);
+      return;
+    }
     const checkLock = async () => {
       try {
+        if (sessionStorage.getItem('tgguild_unlocked') === 'true') {
+          setIsLocked(false);
+          setIsCheckingLock(false);
+          return;
+        }
         const store = await load("settings.json");
         const hash = await store.get<string>("password_hash");
         setIsLocked(!!hash);

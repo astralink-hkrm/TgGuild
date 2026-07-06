@@ -274,3 +274,9 @@ body,
 :root.light textarea:focus {
   border-color: var(--color-telegram-primary);
 }
+
+/* Hide native password reveal button in WebView2/Edge so it doesn't double with our custom eye toggle */
+input[type="password"]::-ms-reveal,
+input[type="password"]::-ms-clear {
+  display: none !important;
+}
