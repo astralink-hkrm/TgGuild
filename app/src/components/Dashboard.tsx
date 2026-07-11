@@ -664,7 +664,7 @@ export function Dashboard({ onLogout, pendingGroupOpen, onPendingGroupOpenConsum
                             groupPhotoUrl={groups.find(g => g.id === activeGroupId)?.photo_url}
                             memberCount={groups.find(g => g.id === activeGroupId)?.member_count ?? activeMembers.length}
                             canManageMembers={canManageActiveGroup}
-                            currentUserId={currentUserId ?? undefined}
+                            currentUserId={currentUser?.user_id ?? undefined}
                             mentionableMembers={activeMembers}
                             members={activeMembers}
                             onManageMembers={() => setShowAddSubscriber(true)}

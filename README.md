@@ -4,42 +4,82 @@
   <img src="Public/baner.png" alt="TgGuild Banner" width="100%">
   <br />
   <img src="Public/logo.png" alt="TgGuild Logo" width="120">
-  <h3>The Ultimate Collaborative Workspace Powered by Telegram</h3>
+
+### A cross-platform desktop workspace powered by Telegram for secure file storage and team collaboration.
 </div>
 
 ---
 
-**TgGuild** is an open-source, cross-platform collaboration and storage powerhouse. It transforms your Telegram account into a unified workspace—serving as a secure, unlimited alternative to both **Google Drive** and **Microsoft Teams**. Built with **Tauri**, **Rust**, and **React**.
+TgGuild is an open-source desktop application built with **Tauri**, **Rust**, and **React**. It uses Telegram as the foundation for cloud file storage and team collaboration, providing a familiar workspace experience without requiring additional servers or databases.
 
-> [!IMPORTANT]
-> This project is inspired by and expanded from the [Telegram-Drive](https://github.com/caamer20/Telegram-Drive) repository. We have significantly extended its capabilities to include comprehensive Microsoft Teams integration and Google Workspace-style features for a complete team ecosystem.
-
----
-
-## 🚀 Key Features
-
-### 📂 Advanced Drive Functionalities
-*   **Infinite Storage**: Leveraging Telegram's unlimited cloud storage for all your assets.
-*   **File & Folder Management**: Full-featured drive operations—create, rename, move, and organize folders with ease.
-*   **Collaboration First**: Add members to specific drive folders for real-time collaborative work.
-*   **Drag & Drop**: Intuitive and high-performance file management interface.
-
-### 👥 Enterprise Team Management
-*   **Microsoft Teams Inspired**: Bringing familiar channel structures and team communication into the Telegram ecosystem.
-*   **Google Workspace for Teams**: Integrated features for document management and team coordination directly within the app.
-*   **Robust Team Management**: Powerful controls for managing team members, roles, and workspace visibility.
-*   **1:1 & Group Meetings**: Built-in coordination for direct meetings and group collaboration.
-*   **Corporate Hierarchy**: Features tailored for company-wide management and department-specific workspaces.
-
-### 🛠️ Technical Excellence
-*   **Privacy & Security**: End-to-end focus where all API keys and data stay local. No third-party servers.
-*   **High-Performance Grid**: Virtual scrolling handles thousands of files and folders instantly.
-*   **Media & Document Support**: Integrated PDF viewer, media streaming, and rich file previews.
-*   **Cross-Platform Native**: High-performance apps for Windows, macOS, and Linux built with Tauri & Rust.
+> [!NOTE]
+> TgGuild is based on the open-source **Telegram-Drive** project by **caamer20**. It extends the original project with team collaboration features, media streaming, an improved file management experience, and various usability enhancements while continuing to leverage Telegram as the underlying platform.
 
 ---
 
-## 📸 Screenshots
+# ✨ Highlights
+
+- 📁 Telegram-powered cloud file storage
+- 👥 Team collaboration through Telegram groups
+- 🎥 Built-in media streaming and PDF viewer
+- 🔐 QR code and two-factor authentication support
+- 🖥️ Native cross-platform desktop application built with Tauri
+
+---
+
+# 🚀 Features
+
+## 📂 File Management
+
+- Upload and download files with real-time progress tracking.
+- Create, rename, move, and delete folders.
+- Organize files through a familiar drive-style interface.
+- Drag files between folders within the application.
+- Search files across your workspace.
+- Share and forward files to chats and teams.
+
+---
+
+## 💬 Team Collaboration
+
+- Create and manage teams backed by Telegram groups.
+- Real-time messaging.
+- Message reactions and replies.
+- Pinned and starred messages.
+- Typing indicators and online presence.
+- Voice messages with inline playback.
+- Forward messages across chats.
+
+---
+
+## 🎥 Media & Preview
+
+- Inline audio and video playback.
+- Built-in PDF viewer.
+- Image previews with thumbnail grids.
+- Lazy loading for improved performance.
+
+---
+
+## 🔐 Authentication
+
+- Phone number authentication.
+- Two-factor authentication (2FA).
+- QR code login using the Telegram mobile application.
+
+---
+
+## ⚡ Productivity
+
+- Keyboard shortcuts for common actions.
+- Automatic application updates.
+- Dark and light themes.
+- Workspace visibility controls.
+- Optional Google Meet link generation for team collaboration.
+
+---
+
+# 📸 Screenshots
 
 | Dashboard | File Preview |
 |-----------|--------------|
@@ -54,7 +94,7 @@
 | ![Audio Playback](screenshots/AudioPlayback.png) | ![Video Playback](screenshots/VideoPlayback.png) |
 
 | Auth Code Screen | Upload Example |
-|------------------|-------------|
+|------------------|----------------|
 | ![Auth Code Screen](screenshots/AuthCodeScreen.png) | ![Upload Example](screenshots/UploadExample.png) |
 
 | Folder Creation | Folder List View |
@@ -63,63 +103,191 @@
 
 ---
 
-## 🛠️ Tech Stack
+# 🛠 Tech Stack
 
-*   **Frontend**: React 19, TypeScript, TailwindCSS, Framer Motion
-*   **Backend**: Rust (Tauri v2), Grammers (High-performance Telegram Client)
-*   **Build Tool**: Vite, Cargo
+### Frontend
 
----
+- React 19
+- TypeScript
+- Tailwind CSS v4
+- Framer Motion
+- TanStack Query
+- TanStack Virtual
+- PDF.js
+- Lucide React
 
-## 🚀 Getting Started
+### Backend
 
-### Prerequisites
+- Rust
+- Tauri v2
+- Grammers (Telegram MTProto Client)
+- Actix Web
+- Tokio
 
-*   **Node.js (v18+)**
-*   **Rust (latest stable)**
-*   **OS-Specific Build Tools**:
-    *   **Windows**: Visual Studio Build Tools with "Desktop development with C++" workload.
-    *   **macOS**: Xcode Command Line Tools.
-    *   **Linux**: `libwebkit2gtk-4.1-dev`, `build-essential`, etc.
-*   **Telegram API Credentials**: Get your `api_id` and `api_hash` from [my.telegram.org](https://my.telegram.org).
+### Build & Tooling
 
-### Quick Start
-
-1.  **Clone and Install Dependencies**
-    ```bash
-    git clone https://github.com/yourusername/TgGuild.git
-    cd TgGuild/app
-    npm install
-    ```
-
-2.  **Generate App Icons**
-    ```bash
-    npm run tauri icon ../Public/logo.png
-    ```
-
-3.  **Run Development Mode**
-    ```bash
-    npm run tauri dev
-    ```
-
-4.  **Build Production App**
-    ```bash
-    npm run tauri build
-    ```
+- Vite
+- Cargo
+- GitHub Actions
 
 ---
 
-## 📄 License
+# 🏗 Architecture
 
-This project is licensed under the **MIT License**.
+```text
+                 React Frontend
+                        │
+                        ▼
+                   Tauri IPC
+                        │
+                        ▼
+                  Rust Backend
+                 ↙              ↘
+Telegram MTProto API     Local Media Streaming
+```
+
+TgGuild combines a React frontend with a Rust backend through Tauri IPC. Telegram provides the underlying cloud infrastructure for file storage and team collaboration, while a lightweight local media service enables smooth streaming and preview of supported files.
 
 ---
-*Disclaimer: This application is not affiliated with Telegram FZ-LLC. Use responsibly and in accordance with Telegram's Terms of Service.*
+
+# 🚀 Getting Started
+
+## Prerequisites
+
+- Node.js v18 or later
+- Rust (latest stable)
+- Telegram API credentials (`api_id` and `api_hash`)
+- Platform-specific build tools
+
+### Windows
+
+Visual Studio Build Tools with the **Desktop development with C++** workload.
+
+### macOS
+
+Xcode Command Line Tools.
+
+### Linux
+
+- `libwebkit2gtk-4.1-dev`
+- `build-essential`
 
 ---
+
+## Installation
+
+```bash
+git clone https://github.com/astralink-hkrm/TgGuild.git
+cd TgGuild/app
+npm install
+```
+
+Generate application icons:
+
+```bash
+npm run tauri icon ../Public/logo.png
+```
+
+Run in development mode:
+
+```bash
+npm run tauri dev
+```
+
+Build the production application:
+
+```bash
+npm run tauri build
+```
+
+---
+
+# 📖 Usage
+
+## Authentication
+
+Sign in using your phone number or scan a QR code from the Telegram mobile app. If two-factor authentication (2FA) is enabled on your Telegram account, you'll be prompted to enter your password before accessing the application.
+
+---
+
+## File Management
+
+Navigate your personal drive or team workspaces from the sidebar. Upload files, create folders, organize your content, and use familiar actions such as rename, move, delete, and share to manage your workspace efficiently.
+
+---
+
+## Teams
+
+Create teams backed by Telegram groups, invite members using shareable links, exchange messages, collaborate on shared files, and generate optional Google Meet links directly from team conversations.
+
+---
+
+## Media
+
+Open images, videos, audio files, and PDFs directly inside the application. Built-in media playback and document preview provide a seamless viewing experience without leaving TgGuild.
+
+---
+
+# 🔒 Security
+
+- Telegram API credentials and session data are stored locally on your device and are never sent to third-party servers.
+- Media streaming runs through a locally authenticated service to provide secure playback within the application.
+- Content Security Policy (CSP) restricts unauthorized network access and helps protect the application from unwanted external resources.
+- Filesystem access is limited to the directories required by the application for secure storage and temporary files.
+- Automatic updates are cryptographically verified before installation to ensure update authenticity and integrity.
+
+---
+
+# 🗺 Roadmap
+
+- Cross-platform CI builds for Linux and macOS
+- Folder-level sharing between users
+- Native OS drag-and-drop for file uploads
+- Advanced file search with filters
+- System tray support and background notifications
+- Expanded collaboration and workspace features
+
+---
+
+# 🤝 Contributing
+
+Contributions are welcome!
+
+Before submitting a pull request:
+
+1. Install the required prerequisites (Node.js, Rust, and platform-specific build tools).
+2. Clone the repository and install project dependencies.
+3. Start the development environment using:
+
+   ```bash
+   npm run tauri dev
+   ```
+
+4. Follow the existing project structure and coding conventions.
+5. TypeScript code should follow the project's strict type checking, and Rust code should pass `cargo clippy` without warnings whenever possible.
+6. For significant changes or new features, please open an issue first to discuss the proposed approach.
+
+---
+
+# 📄 License
+
+This project is licensed under the MIT License.
+
+---
+
+# ⚠ Disclaimer
+
+This application is **not affiliated with Telegram FZ-LLC**. Please use it responsibly and in accordance with Telegram's Terms of Service.
+
+---
+
+# ❤️ Acknowledgements
+
+TgGuild is based on the open-source **Telegram-Drive** project created by **caamer20**.
+
+We sincerely appreciate the original project and its contributions to the open-source community. If you find TgGuild useful, please consider supporting the original developer.
 
 <div align="center">
-  <p>If you like this project, consider supporting the original developer of Telegram-Drive:</p>
   <a href="https://www.paypal.me/Caamer20">
     <img src="https://raw.githubusercontent.com/stefan-niedermann/paypal-donate-button/master/paypal-donate-button.png" alt="Donate with PayPal" width="200">
   </a>
