@@ -17,19 +17,19 @@ TgGuild is an open-source desktop application built with **Tauri**, **Rust**, an
 
 ---
 
-# ✨ Highlights
+## Highlights
 
-- 📁 Telegram-powered cloud file storage
-- 👥 Team collaboration through Telegram groups
-- 🎥 Built-in media streaming and PDF viewer
-- 🔐 QR code and two-factor authentication support
-- 🖥️ Native cross-platform desktop application built with Tauri
+- Telegram-powered cloud file storage
+- Team collaboration through Telegram groups
+- Built-in media streaming and PDF viewer
+- QR code and two-factor authentication support
+- Native cross-platform desktop application built with Tauri
 
 ---
 
-# 🚀 Features
+## Features
 
-## 📂 File Management
+### File Management
 
 - Upload and download files with real-time progress tracking.
 - Create, rename, move, and delete folders.
@@ -38,9 +38,7 @@ TgGuild is an open-source desktop application built with **Tauri**, **Rust**, an
 - Search files across your workspace.
 - Share and forward files to chats and teams.
 
----
-
-## 💬 Team Collaboration
+### Team Collaboration
 
 - Create and manage teams backed by Telegram groups.
 - Real-time messaging.
@@ -50,26 +48,20 @@ TgGuild is an open-source desktop application built with **Tauri**, **Rust**, an
 - Voice messages with inline playback.
 - Forward messages across chats.
 
----
-
-## 🎥 Media & Preview
+### Media and Preview
 
 - Inline audio and video playback.
 - Built-in PDF viewer.
 - Image previews with thumbnail grids.
 - Lazy loading for improved performance.
 
----
-
-## 🔐 Authentication
+### Authentication
 
 - Phone number authentication.
 - Two-factor authentication (2FA).
 - QR code login using the Telegram mobile application.
 
----
-
-## ⚡ Productivity
+### Productivity
 
 - Keyboard shortcuts for common actions.
 - Automatic application updates.
@@ -79,7 +71,7 @@ TgGuild is an open-source desktop application built with **Tauri**, **Rust**, an
 
 ---
 
-# 📸 Screenshots
+## Screenshots
 
 | Dashboard | File Preview |
 |-----------|--------------|
@@ -103,7 +95,7 @@ TgGuild is an open-source desktop application built with **Tauri**, **Rust**, an
 
 ---
 
-# 🛠 Tech Stack
+## Tech Stack
 
 ### Frontend
 
@@ -124,7 +116,7 @@ TgGuild is an open-source desktop application built with **Tauri**, **Rust**, an
 - Actix Web
 - Tokio
 
-### Build & Tooling
+### Build and Tooling
 
 - Vite
 - Cargo
@@ -132,17 +124,17 @@ TgGuild is an open-source desktop application built with **Tauri**, **Rust**, an
 
 ---
 
-# 🏗 Architecture
+## Architecture
 
 ```text
                  React Frontend
-                        │
-                        ▼
+                        |
+                        v
                    Tauri IPC
-                        │
-                        ▼
+                        |
+                        v
                   Rust Backend
-                 ↙              ↘
+                 /              \
 Telegram MTProto API     Local Media Streaming
 ```
 
@@ -150,31 +142,31 @@ TgGuild combines a React frontend with a Rust backend through Tauri IPC. Telegra
 
 ---
 
-# 🚀 Getting Started
+## Getting Started
 
-## Prerequisites
+### Prerequisites
 
 - Node.js v18 or later
 - Rust (latest stable)
 - Telegram API credentials (`api_id` and `api_hash`)
 - Platform-specific build tools
 
-### Windows
+#### Windows
 
 Visual Studio Build Tools with the **Desktop development with C++** workload.
 
-### macOS
+#### macOS
 
 Xcode Command Line Tools.
 
-### Linux
+#### Linux
 
 - `libwebkit2gtk-4.1-dev`
 - `build-essential`
 
 ---
 
-## Installation
+### Installation
 
 ```bash
 git clone https://github.com/astralink-hkrm/TgGuild.git
@@ -202,33 +194,27 @@ npm run tauri build
 
 ---
 
-# 📖 Usage
+## Usage
 
-## Authentication
+### Authentication
 
-Sign in using your phone number or scan a QR code from the Telegram mobile app. If two-factor authentication (2FA) is enabled on your Telegram account, you'll be prompted to enter your password before accessing the application.
+Sign in using your phone number or scan a QR code from the Telegram mobile app. If two-factor authentication (2FA) is enabled on your Telegram account, you will be prompted to enter your password before accessing the application.
 
----
-
-## File Management
+### File Management
 
 Navigate your personal drive or team workspaces from the sidebar. Upload files, create folders, organize your content, and use familiar actions such as rename, move, delete, and share to manage your workspace efficiently.
 
----
-
-## Teams
+### Teams
 
 Create teams backed by Telegram groups, invite members using shareable links, exchange messages, collaborate on shared files, and generate optional Google Meet links directly from team conversations.
 
----
-
-## Media
+### Media
 
 Open images, videos, audio files, and PDFs directly inside the application. Built-in media playback and document preview provide a seamless viewing experience without leaving TgGuild.
 
 ---
 
-# 🔒 Security
+## Security
 
 - Telegram API credentials and session data are stored locally on your device and are never sent to third-party servers.
 - Media streaming runs through a locally authenticated service to provide secure playback within the application.
@@ -238,7 +224,7 @@ Open images, videos, audio files, and PDFs directly inside the application. Buil
 
 ---
 
-# 🗺 Roadmap
+## Roadmap
 
 - Cross-platform CI builds for Linux and macOS
 - Folder-level sharing between users
@@ -249,7 +235,7 @@ Open images, videos, audio files, and PDFs directly inside the application. Buil
 
 ---
 
-# 🤝 Contributing
+## Contributing
 
 Contributions are welcome!
 
@@ -269,19 +255,19 @@ Before submitting a pull request:
 
 ---
 
-# 📄 License
+## License
 
 This project is licensed under the MIT License.
 
 ---
 
-# ⚠ Disclaimer
+## Disclaimer
 
 This application is **not affiliated with Telegram FZ-LLC**. Please use it responsibly and in accordance with Telegram's Terms of Service.
 
 ---
 
-# ❤️ Acknowledgements
+## Acknowledgements
 
 TgGuild is based on the open-source **Telegram-Drive** project created by **caamer20**.
 
